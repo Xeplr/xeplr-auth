@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 
+try {
+  var envName = (process.env.NODE_ENV || 'development') + '.env';
+  require('dotenv').config({ path: require('path').join(process.cwd(), envName) });
+} catch (_) {}
+
 const path = require('path');
 const { up, rollback, status } = require('@xeplr/db').migrator;
+const { resolveConfig } = require('@xeplr/db');
 
 /**
  * xeplr-auth-migrate
@@ -33,12 +39,17 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
 
-  // Always use bundled migrations directory
+  // Always use bundled migrations directory + auth connection.
   const options = {
     ...args,
     db: args.db || process.env.DB_AUTH || process.env.DB_NAME,
-    dir: path.join(__dirname, '..', 'migrations')
+    dir: path.join(__dirname, '..', 'migrations'),
+    connectionName: args['connection-name'] || args.connectionName || 'auth'
   };
+
+  if (['up', 'rollback', 'status'].indexOf(command) !== -1) {
+    await resolveConfig(options.connectionName);
+  }
 
   switch (command) {
     case 'up': {
