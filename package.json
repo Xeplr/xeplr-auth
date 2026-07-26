@@ -1,9 +1,15 @@
 {
   "name": "@xeplr/auth",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pluggable authentication service: register, login, forgot/reset password, RBAC, multi-tenancy",
   "main": "index.js",
-  "files": ["index.js", "lib/", "bin/", "models/", "migrations/"],
+  "files": [
+    "index.js",
+    "lib/",
+    "bin/",
+    "models/",
+    "migrations/"
+  ],
   "bin": {
     "xeplr-auth-migrate": "./bin/migrate.js",
     "xeplr-auth-server": "./bin/server.js"
@@ -13,11 +19,24 @@
     "./bin/server": "./bin/server.js",
     "./package.json": "./package.json"
   },
-  "keywords": ["auth", "authentication", "jwt", "rbac", "express", "middleware", "multi-tenancy"],
+  "keywords": [
+    "auth",
+    "authentication",
+    "jwt",
+    "rbac",
+    "express",
+    "middleware",
+    "multi-tenancy"
+  ],
   "author": "xeplr",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/Xeplr/xeplr-auth" },
-  "publishConfig": { "access": "public" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Xeplr/xeplr-auth"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "bcrypt": "^6.0.0",
     "ioredis": "^5.6.1",
