@@ -4,6 +4,9 @@ class Api extends BaseModel {
   static get tableName() { return 'apis'; }
   static get idColumn() { return 'id'; }
 
+  // Shared RBAC catalog, not per-tenant data — see Role.js for why.
+  static get multiTenant() { return false; }
+
   static get jsonSchema() {
     return {
       type: 'object',

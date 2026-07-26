@@ -9,6 +9,14 @@ class Role extends BaseModel {
     return 'id';
   }
 
+  // Shared RBAC catalog (role definitions), not per-tenant data — tenant
+  // scoping happens on userTenantsMapping.roleId, not here. Must opt out:
+  // a brand-new user creating their first company has no MT context yet, and
+  // BaseModel's fail-closed tenant modifier would otherwise return zero rows.
+  static get multiTenant() {
+    return false;
+  }
+
   static get jsonSchema() {
     return {
       type: 'object',

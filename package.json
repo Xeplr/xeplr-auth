@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Pluggable authentication service: register, login, forgot/reset password, RBAC, multi-tenancy",
   "main": "index.js",
-  "files": ["index.js", "lib/", "bin/", "models/", "migrations/", "seeds/"],
+  "files": ["index.js", "lib/", "bin/", "models/", "migrations/"],
   "bin": {
     "xeplr-auth-migrate": "./bin/migrate.js",
     "xeplr-auth-server": "./bin/server.js"
@@ -20,7 +20,9 @@
   "publishConfig": { "access": "public" },
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "ioredis": "^5.6.1",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^1.4.5-lts.1",
     "@xeplr/base-apis": "^1.0.0",
     "@xeplr/db": "^1.0.0",
     "@xeplr/utils": "^1.0.0"

@@ -18,9 +18,12 @@ class User extends BaseModel {
         id: { type: 'string', maxLength: 25 },
         email: { type: 'string', maxLength: 255 },
         phoneNumber: { type: ['string', 'null'], maxLength: 255 },
+        phoneVerified: { type: 'boolean' },
+        phoneVerifiedOn: { type: ['string', 'null'] },
         name: { type: ['string', 'null'], maxLength: 255 },
         pwd: { type: ['string', 'null'], maxLength: 255 },
         pwdSalt: { type: ['string', 'null'], maxLength: 100 },
+        profilePicUrl: { type: ['string', 'null'], maxLength: 500 },
         isActive: { type: 'boolean' },
         mtId1: { type: ['string', 'null'], maxLength: 25 },
         mtId2: { type: ['string', 'null'], maxLength: 25 },
@@ -43,7 +46,6 @@ class User extends BaseModel {
 
   static get relationMappings() {
     const Role = require('./Role');
-    const Tenant = require('./Tenant');
     return {
       roles: {
         relation: BaseModel.ManyToManyRelation,
@@ -55,18 +57,6 @@ class User extends BaseModel {
             to: 'userRolesMapping.roleId'
           },
           to: 'roles.id'
-        }
-      },
-      tenants: {
-        relation: BaseModel.ManyToManyRelation,
-        modelClass: Tenant,
-        join: {
-          from: 'users.id',
-          through: {
-            from: 'userTenantsMapping.userId',
-            to: 'userTenantsMapping.tenantId'
-          },
-          to: 'tenants.id'
         }
       }
     };

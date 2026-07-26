@@ -1,35 +1,17 @@
 #!/usr/bin/env node
 
 /**
- * Standalone auth server entry point.
- * Designed to be forked as a child process or run directly.
+ * Standalone auth service. Reads AUTH_* env — the LAUNCHER provides it; this bin
+ * reads process.env only and loads no .env of its own. The consuming app does:
+ *   "start-auth": "dotenv -e development.env -- xeplr-auth-server"
  *
- * Reads config from AUTH_CONFIG env var (JSON) or individual env vars.
+ * env: ENCRYPTION_KEY · AUTH_DB_CONNECTION_INFO_ENCRYPTED · AUTH_DB_NAME ·
+ *      AUTH_JWT_SECRET · AUTH_PORT · AUTH_ACTIVATION_BASE_URL ·
+ *      AUTH_ACCESS_TOKEN_TTL_MINUTES · AUTH_EXT_MIGRATIONS_DIR · email vars · REDIS_*
  */
-var auth = require('../index');
-
-var config = {};
-
-if (process.env.AUTH_CONFIG) {
-  try {
-    config = JSON.parse(process.env.AUTH_CONFIG);
-  } catch (e) {
-    console.error('Failed to parse AUTH_CONFIG:', e.message);
-    process.exit(1);
-  }
-}
-
-config.port = config.port || process.env.AUTH_PORT || 19001;
-config.database = config.database || process.env.DB_AUTH || 'architects_auth';
-
-if (process.env.JWT_SECRET) {
-  config.jwt = config.jwt || {};
-  config.jwt.secret = config.jwt.secret || process.env.JWT_SECRET;
-}
-
-auth.start(config);
-
-// Notify parent process (if forked) that auth is ready
-if (process.send) {
-  process.send({ status: 'ready', port: config.port });
-}
+require('../index').boot().then(function () {
+  if (process.send) process.send({ status: 'ready' });
+}).catch(function (err) {
+  console.error('[auth] startup failed:', err.stack || err.message);
+  process.exit(1);
+});

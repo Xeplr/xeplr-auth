@@ -4,6 +4,9 @@ class UiElement extends BaseModel {
   static get tableName() { return 'uiElements'; }
   static get idColumn() { return 'id'; }
 
+  // Shared RBAC catalog, not per-tenant data — see Role.js for why.
+  static get multiTenant() { return false; }
+
   static get jsonSchema() {
     return {
       type: 'object',
