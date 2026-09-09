@@ -5,7 +5,7 @@
 
 const path = require('path');
 const { up, status } = require('@xeplr/db').sqlMigrator;
-const { resolveConfig } = require('@xeplr/db');
+const { resolveConfig, migrationsFor } = require('@xeplr/db');
 
 /**
  * xeplr-auth-migrate
@@ -15,14 +15,24 @@ const { resolveConfig } = require('@xeplr/db');
  * base data lives in migrations so it runs exactly once). Reuses xeplr-db's
  * sqlMigrator — hand-written .sql files, no down(), ledger-tracked.
  *
- * The app points at its extension dir ONCE via env: AUTH_EXT_MIGRATIONS_DIR
- * (or --extDir). Base migrations run first, then the app's — one ledger.
+ * The app points at its extension dir(s) via env: XEPLR_AUTH_MIGRATIONS
+ * (or --extDir). Base migrations run first, then the extension dir(s) — one
+ * shared ledger, tracked by filename.
+ *
+ * XEPLR_AUTH_MIGRATIONS accepts a COMMA-SEPARATED list, not just one path —
+ * this is how several consuming apps' extension migrations (workflow's,
+ * jobs', BI's own) can all land in the SAME target database from a single
+ * controlled run, without any one app's migrations folder having to contain
+ * another's:
+ *   XEPLR_AUTH_MIGRATIONS=/path/to/bi/migrations-auth,/path/to/workflow/migrations-auth
+ * Sibling apps must keep their migration FILENAMES distinct from each
+ * other's — the ledger is keyed by filename alone, not by which directory it
+ * came from.
  *
  * Usage:
- *   xeplr-auth-migrate up [--extDir <dir>] [--db <database>]
- *   xeplr-auth-migrate status [--extDir <dir>] [--db <database>]
+ *   xeplr-auth-migrate up [--extDir <dir>[,<dir>...]] [--db <database>]
+ *   xeplr-auth-migrate status [--extDir <dir>[,<dir>...]] [--db <database>]
  */
-
 function parseArgs(argv) {
   const args = { _: [] };
   for (let i = 0; i < argv.length; i++) {
@@ -42,13 +52,17 @@ async function main() {
   const command = args._[0];
 
   // Bundled auth migrations (base) + the app's extension migrations dir, which
-  // the app configures ONCE via AUTH_EXT_MIGRATIONS_DIR (or --extDir). Base runs
+  // the app configures ONCE via XEPLR_AUTH_MIGRATIONS (or --extDir). Base runs
   // first, then the extension — one shared ledger.
   const options = {
     ...args,
     db: args.db || process.env.AUTH_DB_NAME,
     dir: path.join(__dirname, '..', 'migrations'),
-    extDir: args.extDir || args['ext-dir'] || process.env.AUTH_EXT_MIGRATIONS_DIR,
+    // Same convention as every other entry point and every other library —
+    // splitting and existence-checking live in @xeplr/db's
+    // resolveDirectories(), not here. This CLI having had its own parseExtDir
+    // while boot() had none is exactly how the two diverged.
+    extDir: args.extDir || args['ext-dir'] || migrationsFor('auth'),
     connectionName: args['connection-name'] || args.connectionName || 'auth'
   };
 
@@ -92,10 +106,10 @@ async function main() {
       console.log('xeplr-auth-migrate - Auth database migrations');
       console.log('');
       console.log('Commands:');
-      console.log('  up [--extDir <dir>]     Run base + app extension migrations');
-      console.log('  status [--extDir <dir>] Show migration status');
+      console.log('  up [--extDir <dir>[,<dir>...]]     Run base + app extension migrations');
+      console.log('  status [--extDir <dir>[,<dir>...]] Show migration status');
       console.log('');
-      console.log('  App extension dir: --extDir or AUTH_EXT_MIGRATIONS_DIR env');
+      console.log('  App extension dir(s): --extDir or XEPLR_AUTH_MIGRATIONS env (comma-separated for more than one)');
       console.log('');
       console.log('Options:');
       console.log('  --db        Database name (or AUTH_DB_NAME env)');

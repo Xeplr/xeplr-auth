@@ -7,7 +7,7 @@
  *
  * env: ENCRYPTION_KEY · AUTH_DB_CONNECTION_INFO_ENCRYPTED · AUTH_DB_NAME ·
  *      AUTH_JWT_SECRET · AUTH_PORT · AUTH_ACTIVATION_BASE_URL ·
- *      AUTH_ACCESS_TOKEN_TTL_MINUTES · AUTH_EXT_MIGRATIONS_DIR · email vars · REDIS_*
+ *      AUTH_ACCESS_TOKEN_TTL_MINUTES · XEPLR_AUTH_MIGRATIONS · email vars · REDIS_*
  */
 require('../index').boot().then(function () {
   if (process.send) process.send({ status: 'ready' });
