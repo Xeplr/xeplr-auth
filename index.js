@@ -97,6 +97,17 @@ async function start(config = {}) {
   const adminRtr = createAdminRouter();
 
   return createApp(port, 'xeplr-auth', {
+    // THE ONE SERVICE THAT CANNOT USE createApp's DEFAULT GATE — that gate
+    // validates a token by asking the auth service over HTTP, and this IS the
+    // auth service. It would be asking itself, and /login has no token to ask
+    // with.
+    //
+    // Not a hole. createAuthRouter gates its own protected routes per-route
+    // with authMiddleware (/me, /profile, /change-password, /sse-ticket, and
+    // all of /admin). What is left open — login, register, activate, refresh,
+    // forgot/reset-password — is open by design, because it is how a caller
+    // obtains a token in the first place.
+    auth: false,
     corsOptions: config.corsOptions,
     middleware: config.middleware,
     routes: { '/auth/api': authRouter, '/auth/api/admin': adminRtr }
