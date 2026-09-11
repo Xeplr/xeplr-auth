@@ -126,9 +126,56 @@ async function start(config = {}) {
 //   connection AUTH_DB_CONNECTION_INFO_ENCRYPTED · db AUTH_DB_NAME · AUTH_JWT_SECRET
 //   AUTH_PORT · AUTH_ACTIVATION_BASE_URL · AUTH_ACCESS_TOKEN_TTL_MINUTES
 //   XEPLR_AUTH_MIGRATIONS · email vars · REDIS_*
+/**
+ * REDIS HOLDS THE SESSIONS, so this service cannot authenticate anybody
+ * without it. Checked here, out loud, because the way this fails otherwise is
+ * genuinely cruel:
+ *
+ *   • login SUCCEEDS — minting a token does not need Redis to work
+ *   • the session write fails silently
+ *   • every later request finds no live session and answers
+ *     "Invalid or expired token"
+ *
+ * So a brand-new token is rejected as expired, and the message sends whoever
+ * is debugging it towards clocks, token lifetimes and JWT secrets — anywhere
+ * but the service that is not running. It cost two people an afternoon before
+ * this check existed.
+ *
+ * Refuses rather than warns. An auth service that cannot keep a session is not
+ * degraded, it is unable to do the one thing it is for, and starting anyway
+ * only moves the failure somewhere less obvious.
+ */
+async function checkSessionStore() {
+  var host = process.env.REDIS_HOST || 'localhost';
+  var port = process.env.REDIS_PORT || '6379';
+  var probe = '__xeplr_auth_startup_probe__';
+
+  try {
+    var { cache } = require('@xeplr/utils');
+    await cache.set(probe, { ok: true }, 5);
+    var back = await cache.get(probe);
+    await cache.del(probe);
+    if (!back || !back.ok) throw new Error('the session store did not return what was written to it');
+  } catch (err) {
+    console.error('\n[xeplr-auth] Cannot reach the session store (Redis) at ' + host + ':' + port + '.');
+    console.error('             ' + (err && err.message ? err.message : err) + '\n');
+    console.error('  Sign-in sessions are kept there, so without it every login');
+    console.error('  succeeds and then every request is refused as "Invalid or');
+    console.error('  expired token" — which looks like a token problem and is not.\n');
+    console.error('  Start Redis, or point REDIS_HOST / REDIS_PORT at one:\n');
+    console.error('    macOS    brew services start redis');
+    console.error('    Linux    sudo systemctl start redis');
+    console.error('    Windows  docker run -d -p 6379:6379 redis');
+    console.error('             (Redis has no native Windows build — Docker or WSL)\n');
+    process.exit(1);
+  }
+}
+
 async function boot() {
   var connName = 'auth';
   var database = process.env.AUTH_DB_NAME || 'auth';
+
+  await checkSessionStore();
 
   await resolveConfig(connName, authConnection());
 
