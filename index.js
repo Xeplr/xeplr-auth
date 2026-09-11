@@ -267,6 +267,18 @@ var requiredEnv = [
   'AUTH_PORT',
   'AUTH_DB_NAME',                        // auth db (api reaches it via attach())
   'XEPLR_AUTH_MIGRATIONS',             // migrations run via migrate:up
+
+  // THE FIRST ACCOUNT — consumed by migrations/0008_super_admin.sql, which
+  // this package now ships so that every app does not hand-write the same
+  // insert against columns this package owns.
+  //
+  // Required, not optional: an install that migrates cleanly and has nobody
+  // who can sign in is not a working install, and the failure shows up much
+  // later than the cause. The migrator refuses by name if either is unset,
+  // so this listing only moves the same complaint to `check-env`, before
+  // anything starts.
+  'AUTH_SUPER_ADMIN_EMAIL',
+  'AUTH_SUPER_ADMIN_PASSWORD',
 ];
 
 // Read at ACCESS time so it reflects the .env the app has already loaded — the
