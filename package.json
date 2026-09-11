@@ -1,6 +1,6 @@
 {
   "name": "@xeplr/auth",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "description": "Pluggable authentication service: register, login, forgot/reset password, RBAC, multi-tenancy",
   "main": "index.js",
   "files": [
