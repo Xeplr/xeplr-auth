@@ -200,6 +200,13 @@ async function boot() {
 
   // Configure email (via @xeplr/utils, the engine auth uses) + activation links.
   require('@xeplr/utils').configureFromEnv();
+
+  // Whether mail can actually go out — asked, not assumed from a variable
+  // being set. Reported in the banner and NEVER fatal: sign-in works without
+  // email; only the messages that carry links (activation, invite, password
+  // reset) cannot be sent, and the banner says so rather than the first
+  // person to register finding out.
+  var email = await emailStatus();
   authService.configureActivation({
     // Fully qualified, one per link — the token is the only thing appended.
     // AUTH_ACTIVATION_BASE_URL still works as an origin; see configureActivation.
@@ -219,13 +226,37 @@ async function boot() {
     }
   });
 
-  banner();
+  banner(email);
+  if (!email.ok) warnNoEmail(email);
   return server;
+}
+
+async function emailStatus() {
+  var utils = require('@xeplr/utils');
+  if (typeof utils.checkEmail !== 'function') {
+    return { ok: true, unknown: true, detail: 'not checked — @xeplr/utils is too old to check' };
+  }
+  return utils.checkEmail({ timeoutMs: 5000 });
+}
+
+function warnNoEmail(email) {
+  console.warn('[xeplr-auth] EMAIL IS NOT WORKING — ' + String(email.detail).replace(/\.$/, '') + '.');
+  console.warn('             Sign-in keeps working. Registration, invites and password');
+  console.warn('             resets cannot send their links until this is fixed: set');
+  console.warn('             EMAIL_PROVIDER (smtp, brevo, aws or azure) and its settings.\n');
+}
+
+function describeEmail(email) {
+  if (!email) return process.env.EMAIL_PROVIDER || '(not configured)';
+  if (email.unknown) return '? ' + email.detail;
+  return email.ok
+    ? '✓ ' + email.provider + ' — ' + email.detail
+    : '✗ NOT WORKING — ' + email.detail;
 }
 
 // Startup summary — the EFFECTIVE config (defaults resolved) so you can see what
 // the service is actually running with. Secrets are masked, never printed.
-function banner() {
+function banner(email) {
   var set = function (v) { return v ? '✓ set' : '✗ MISSING'; };
   var rows = [
     ['port',               process.env.AUTH_PORT || '19001'],
@@ -238,7 +269,7 @@ function banner() {
     ['slide tolerance',    (process.env.AUTH_ACCESS_TOKEN_TOLERANCE_SECONDS || '0') + 's'],
     ['max sessions/user',  process.env.AUTH_MAX_SESSIONS_PER_USER || '5'],
     ['redis',              (process.env.REDIS_HOST || 'localhost') + ':' + (process.env.REDIS_PORT || '6379')],
-    ['email',              process.env.EMAIL_PROVIDER || '(not configured)'],
+    ['email',              describeEmail(email)],
     // Names the VARIABLE it resolved through, not just "set" — with a shared
     // default and a per-service override, "which server am I on" is otherwise
     // a guess.
