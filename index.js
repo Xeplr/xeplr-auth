@@ -9,6 +9,7 @@ var AUTH_CONN_VAR = 'AUTH_DB_CONNECTION_INFO_ENCRYPTED';
 function authConnection() { return resolveDbConnection(AUTH_CONN_VAR); }
 const { createApp } = require('@xeplr/base-apis');
 const authHelper = require('./lib/authHelper');
+const { redisPrefix } = require('./lib/redisPrefix');
 const { seedSuperAdmin } = require('./lib/seed');
 const authMiddleware = require('./lib/authMiddleware');
 const authService = require('./lib/authService');
@@ -35,6 +36,10 @@ let _initialized = false;
  * @param {string} [config.resetBaseUrl] - Base URL for password reset links
  */
 async function init(config = {}) {
+  // Before anything touches Redis. Here rather than only in boot() so a host
+  // that mounts auth's routers in its own process is held to it too.
+  redisPrefix();
+
   // One call: decrypt the app-supplied connection, connect, and bind the models.
   const dbName = config.database || process.env.AUTH_DB_NAME || 'auth';
   const connection = await getConnection(dbName, config.connection || config.db, {
@@ -175,6 +180,9 @@ async function boot() {
   var connName = 'auth';
   var database = process.env.AUTH_DB_NAME || 'auth';
 
+  // Ahead of the session-store probe, which would otherwise write its first
+  // key under the shared default.
+  redisPrefix();
   await checkSessionStore();
 
   await resolveConfig(connName, authConnection());
@@ -269,6 +277,7 @@ function banner(email) {
     ['slide tolerance',    (process.env.AUTH_ACCESS_TOKEN_TOLERANCE_SECONDS || '0') + 's'],
     ['max sessions/user',  process.env.AUTH_MAX_SESSIONS_PER_USER || '5'],
     ['redis',              (process.env.REDIS_HOST || 'localhost') + ':' + (process.env.REDIS_PORT || '6379')],
+    ['redis prefix',       redisPrefix()],
     ['email',              describeEmail(email)],
     // Names the VARIABLE it resolved through, not just "set" — with a shared
     // default and a per-service override, "which server am I on" is otherwise
@@ -357,6 +366,12 @@ var requiredEnv = [
   // anything starts.
   'AUTH_SUPER_ADMIN_EMAIL',
   'AUTH_SUPER_ADMIN_PASSWORD',
+
+  // Every auth key in Redis is written under it. Two apps left on the shared
+  // 'xeplr:' default serve each other's menus and API permissions — see
+  // lib/redisPrefix.js. init() also refuses the shared value itself, which a
+  // presence check cannot.
+  'REDIS_PREFIX',
 ];
 
 // Read at ACCESS time so it reflects the .env the app has already loaded — the
