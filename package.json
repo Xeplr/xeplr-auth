@@ -44,7 +44,7 @@
     "multer": "^2.3.0",
     "@xeplr/base-apis": "^2.0.0",
     "@xeplr/db": "^1.0.0",
-    "@xeplr/utils": "^1.0.0"
+    "@xeplr/utils": "^1.0.8"
   },
   "peerDependencies": {
     "express": "^4.0.0 || ^5.0.0"
