@@ -15,6 +15,8 @@ class Api extends BaseModel {
         id: { type: 'string', maxLength: 25 },
         name: { type: ['string', 'null'], maxLength: 255 },
         apiGroup: { type: ['string', 'null'], maxLength: 255 },
+        scope: { type: 'string', enum: ['system', 'company'] },
+        scopeLocked: { type: 'boolean' },
         isPublic: { type: 'integer' },
         recordCreatedDate: { type: ['string', 'null'] },
         recordModifiedDate: { type: ['string', 'null'] },

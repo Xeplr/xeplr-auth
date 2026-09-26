@@ -20,6 +20,11 @@ utils.cache.delPattern = async function(p) {
   var re = new RegExp('^' + p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
   Array.from(store.keys()).forEach(function(k) { if (re.test(k)) store.delete(k); });
 };
+// These users exist only in a header, with no role mappings in the database,
+// so the catalog check on admin routes is let through here: this suite is
+// about scope, not access. accessGate is tested in authRoutesAccess.test.js.
+require('../lib/accessService').requestApiState = async function() { return { api: null, state: 'enabled' }; };
+
 require.cache[require.resolve('../lib/authMiddleware')] = {
   id: 'authMiddleware', loaded: true,
   exports: function(req, res, next) { req.user = JSON.parse(req.headers['x-test-user'] || '{}'); next(); }
@@ -49,7 +54,7 @@ before(async function() {
   await admin.raw('DROP DATABASE IF EXISTS ??', [DB]);
   await admin.raw('CREATE DATABASE ??', [DB]);
   knex = knexLib({ client: 'pg', connection: { database: DB } });
-  for (var f of ['0001_extensions.sql', '0002_users.sql', '0003_catalog_tables.sql', '0004_role_mappings.sql', '0009_menu_labels.sql']) {
+  for (var f of ['0001_extensions.sql', '0002_users.sql', '0003_catalog_tables.sql', '0004_role_mappings.sql', '0009_menu_labels.sql', '0010_system_scope.sql']) {
     await knex.raw(fs.readFileSync(path.join(__dirname, '..', 'migrations', f), 'utf8'));
   }
   BaseModel.knex(knex);

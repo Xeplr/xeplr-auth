@@ -21,6 +21,7 @@ const hooks = require('./lib/hooks');
 const mtMembershipMiddleware = require('./lib/mtMembershipMiddleware');
 const createAuthRouter = require('./lib/authRouter');
 const createAdminRouter = require('./lib/adminRouter');
+const systemScope = require('./lib/systemScope');
 const models = require('./models');
 
 let _initialized = false;
@@ -372,6 +373,12 @@ var requiredEnv = [
   // lib/redisPrefix.js. init() also refuses the shared value itself, which a
   // presence check cannot.
   'REDIS_PREFIX',
+
+  // WHICH HEADER NAMES THE COMPANY a role is created in, or 'none' for a
+  // single-tenant app. Required with no default: a multi-tenant app that
+  // forgot it would create every role as '*' — visible to every company —
+  // and nothing would look wrong. See lib/tenant.js.
+  'AUTH_TENANT_HEADER',
 ];
 
 // Read at ACCESS time so it reflects the .env the app has already loaded — the
@@ -409,6 +416,8 @@ module.exports = {
   authMiddleware,
   accessMiddleware,
   requireRole,
+  systemScopeGuard: systemScope.systemScopeGuard,
+  isSuperAdmin: systemScope.isSuperAdmin,
   mtMembershipMiddleware,
   authHelper,
   seedSuperAdmin,

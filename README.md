@@ -86,7 +86,7 @@ await auth.service.invite({ email, name, invitedBy, inviterName, appName })
 | `requireRole(...names)` | 403 unless `req.user.roles` holds one of the names; use after `authMiddleware` |
 | `mtMembershipMiddleware(options)` | 403 when a tenant header names a value the caller has no membership for |
 | `authService` | `register`, `activate`, `invite`, `previewInvite`, `acceptInvite`, `login`, `forgotPassword`, `resetPassword`, profile, phone OTP, `changePassword`, `configureActivation`, `configureEmail` |
-| `accessService` | `getUserAccess`, `userHasApiAccess`, `getApiRule`, `getPublicItems`, `clearUserAccess`, `clearAccessRules`, `clearAllAccess` |
+| `accessService` | `getUserAccess`, `userApiState`, `userHasApiAccess`, `apiStateFor`, `ACCESS_STATES`, `getApiRule`, `getPublicItems`, `clearUserAccess`, `clearAccessRules`, `clearAllAccess` |
 | `sessionService` | `createSession`, `getSession`, `validateAccessToken`, `slideAccessToken`, `rotateSession`, `destroySession`, `destroyAllUserSessions` |
 | `ticketService` | `issueTicket`, `consumeTicket` — single-use 30-second tickets for SSE / WebSocket |
 | `authHelper` | `configure`, `hashPassword`, `comparePassword`, `generateAccessToken`, `verifyToken`, `decodeVerified`, `generateId`, … |
@@ -113,6 +113,7 @@ Everything in `requiredEnv`, plus a connection and an activation link.
 | `AUTH_SUPER_ADMIN_EMAIL` | — | the first account, used by migration `0008` — [details](#the-first-account) |
 | `AUTH_SUPER_ADMIN_PASSWORD` | — | its password; no quotes, spaces, `$` or `#` (substituted into SQL) |
 | `XEPLR_AUTH_MIGRATIONS` | none | comma-separated app migration directories, run after auth's own — [details](#migrations) |
+| `AUTH_TENANT_HEADER` | — | the header that names the company a role is created in (e.g. `x-company-id`), or `none` for a single-tenant app. No default: a multi-tenant app that forgot it would make every role visible to every company — [details](#roles-belong-to-a-company) |
 | `AUTH_ACTIVATION_URL` | — | full address of your activation page, e.g. `http://localhost:19100/auth/activate`; `?token=…` is appended. The older `AUTH_ACTIVATION_BASE_URL` (below) also satisfies it — `requiredEnv.activationLinkVar` names whichever the install uses. The service starts without it, but registration fails |
 
 ### Optional
@@ -240,6 +241,9 @@ Auth's own migrations:
 | `0007_license_module` | `licenseModule` column (default `core`) on apis, menus, uiPages, uiElements |
 | `0008_super_admin` | the first account |
 | `0009_menu_labels` | `label`, `sortOrder`, `isHidden` on `menus` |
+| `0010_system_scope` | `scope` (`system` / `company`) on `apis` and `roles`, `scopeLocked` on `apis`. Super Admin, the role-management routes and the scope switch become `system`; the routes are locked |
+| `0011_verify_api` | the `GET /auth/api/verify` row, public in the catalog |
+| `0012_default_role_access` | auth's own routes mapped to its default roles: `account:*` to every role, `users:*` `access:*` `settings:*` to Admin, system APIs to nobody but Super Admin |
 
 ## The first account
 
@@ -290,6 +294,7 @@ Client code must read the header and replace its stored token, or the session en
 | `POST /forgot-password` | — | `{ email }` → the same message whether or not the address exists; emails `<resetBaseUrl>/auth/reset-password?token=…` (the request's own origin when no `resetBaseUrl` is given — `boot()` gives none) |
 | `POST /reset-password` | — | `{ token, newPassword }` |
 | `GET /me` | ✓ | `{ user, access }` — `user` is the token's claims |
+| `GET /verify` | ✓ | the check every app's gate makes on every request — see [Every request is checked](#every-request-is-checked) |
 | `GET /profile` · `PUT /profile` | ✓ | `{ id, email, name, phoneNumber, phoneVerified, profilePicUrl, isActivated }`; PUT takes `name`, `phoneNumber`, `email` |
 | `POST /profile/avatar` | ✓ | multipart `avatar`, an image up to 2 MB; stores the file name only — serving `UPLOAD_DIR` is the app's job |
 | `POST /change-password` | ✓ | `{ oldPassword, newPassword }`; ends every session |
@@ -299,12 +304,12 @@ Client code must read the header and replace its stored token, or the session en
 
 ### `/auth/api/admin`
 
-**Every admin route requires a valid token — and most require nothing more.** Any signed-in user can call them unless you mount `accessMiddleware()` or `requireRole()` in front. Only the `menu-items` routes check a role themselves: **Super Admin**, read from the token's `roles` (403 otherwise).
+**Every admin route requires a valid token and is checked against the catalog** (`accessGate`, see [Every request is checked](#every-request-is-checked)): a signed-in user without a role mapped to the route gets `403`. System APIs among them (role create, rename, delete and copy) are Super Admin only on top of that — [system scope](#system-scope). So are the `menu-items` routes.
 
 | route | |
 |---|---|
 | `GET /users` | users with their roles |
-| `GET /roles` | `[{ id, name }]` |
+| `GET /roles` | `[{ id, name, scope, mtId1 }]`: the current company's roles and the generic ones; system roles only for Super Admin |
 | `GET /access-items` | `{ apis, pages, elements, menus }`, each with its roles |
 | `POST /user-role` | `{ userId, roleId, assign }` — grant or remove a role |
 | `POST /access-role` | `{ type: apis\|pages\|elements\|menus, itemId, roleId, assign }` |
@@ -312,6 +317,8 @@ Client code must read the header and replace its stored token, or the session en
 | `GET /master/<type>` | `<type>` is `roles`, `apis`, `pages`, `elements` or `menus` |
 | `POST /master/<type>` | `{ id?, name, … }` — update with `id`, create without |
 | `POST /master/<type>/delete` | `{ id }` |
+| `POST /master/roles/copy` | Super Admin — `{ roleIds, companyIds }` → `{ copied: [{ roleId, companyId, newRoleId }], skipped: [{ roleId, companyId, reason }] }` |
+| `POST /master/apis/scope` | Super Admin — `{ id, scope: 'system' \| 'company' }`: the "Super Admin only" switch; refused for a locked API |
 | `GET /menu-items` | Super Admin — [menu keys and labels](#menu-keys-and-labels) |
 | `POST /menu-items` | Super Admin — `{ items: [{ name, label, sortOrder, isHidden }] }` |
 | `POST /menu-items/add` | Super Admin — `{ name, label, isPublic? }` |
@@ -378,6 +385,64 @@ POST /auth/api/admin/menu-items/remove  { "name": "form:crop" }
 
 Bad input answers `400` with the reason.
 
+### System scope
+
+Some things are not a company's business: managing roles, assigning licences, anything that acts on the whole install. They carry **`scope = 'system'`** (on `apis` and `roles`). Everything else is `company`, the default, and works as before.
+
+| | Super Admin | Everyone else |
+|---|---|---|
+| A **system API** | allowed | refused `403` (`code: 'SYSTEM_SCOPE'`), whatever the role mappings say |
+| A **system role** (Super Admin itself) | sees, edits, assigns | never listed, cannot assign or change |
+| Granting a system API to a role | refused: system APIs are never granted | refused |
+
+System APIs never appear in the Access Matrix (`/admin/access-items` leaves them out), and `/admin/access-role` and `/admin/module-role` refuse or skip them. The Super Admin role itself cannot be deleted, even by Super Admin.
+
+**A row's name** is a path (every method) or `"METHOD path"` (that method only), so a `GET` can stay open on a path whose `POST` is a system action.
+
+**Two ways to make an API system:**
+
+- **A migration**, which travels with the code to every install (below). Add `"scopeLocked" = true` to pin it: a locked API cannot be switched off from the UI.
+- **Super Admin's "Super Admin only" switch** in Master Settings → APIs, for people building an app without code. It calls `POST /auth/api/admin/master/apis/scope { id, scope: 'system' | 'company' }`, itself a locked system API, and takes effect at once. Only Super Admin sees the switch or may call the route. A locked API cannot be switched off (`400`, `code: 'SCOPE_LOCKED'`). Role mappings are kept, so switching an API back restores who had it.
+
+Master Settings refuses to rename or delete a system API's row, since that would leave the route unguarded. `scope` is not an editable field in its ordinary save.
+
+**Registering a product's own system API** is one row in the product's `migrations-auth` directory, with no change here:
+
+```sql
+INSERT INTO "apis" (id, name, "apiGroup", "scope", "isPublic", "isActive", "mtId1", "recordCreatedDate", "recordModifiedDate")
+SELECT encode(gen_random_bytes(12), 'hex'), 'POST /api/licences/assign', 'licences:edit', 'system', false, true, '*', now(), now()
+WHERE NOT EXISTS (SELECT 1 FROM "apis" WHERE name = 'POST /api/licences/assign');
+```
+
+To make APIs that are already registered system APIs, update their rows the same way:
+
+```sql
+UPDATE "apis" SET "scope" = 'system'
+WHERE name IN ('POST /api/licences/assign', '/api/companies/create') AND "scope" <> 'system';
+```
+
+and the product mounts the guard in front of its routes, after its auth check:
+
+```js
+const { systemScopeGuard } = require('@xeplr/auth');
+router.use(systemScopeGuard());
+```
+
+The guard reads the catalog (cached with the other access rules, cleared by `clearAccessRules()`) and fails closed: if the catalog cannot be read, it answers `503` rather than letting a request through. The auth service's own admin routes are behind it already.
+
+Super Admin is the user `0008_super_admin.sql` creates from `AUTH_SUPER_ADMIN_EMAIL` / `AUTH_SUPER_ADMIN_PASSWORD`, which `@xeplr/cli` fills in for every new app.
+
+**The role routes:**
+
+```
+GET  /auth/api/admin/master/roles           → [{ id, name, scope }]   no system roles unless Super Admin
+POST /auth/api/admin/master/roles           { "name": "Workspace Admin" }             → { id }   system: create (scope 'company' unless given)
+POST /auth/api/admin/master/roles           { "id": "…", "name": "Workspace Admins" }  → { id }   system: rename
+POST /auth/api/admin/master/roles/delete    { "id": "…" }                              → { ok }   system
+```
+
+A new role appears as a column in the User Roles and Access Matrix screens of `@xeplr/ui-account` with no further change: both read this list.
+
 ## Access checks
 
 **`accessMiddleware(options)`** guards your own API routes from the `apis` catalog:
@@ -391,17 +456,84 @@ app.use('/api', auth.accessMiddleware())       // API name = req.baseUrl + req.p
 | not in `apis` | open |
 | `isPublic` | open |
 | in `apis` with no roles mapped | open |
-| mapped to roles | Bearer token required (signature and expiry — not the Redis session); `403 Access denied` unless the user holds one of those roles |
+| mapped to roles | Bearer token required (signature and expiry — not the Redis session), then the user's [access state](#access-states) |
 
 Pass `apiNameResolver(req)` to name APIs differently. Because unregistered means open, register every route that must be guarded.
 
 **`requireRole('Admin', 'Super Admin')`** checks the role names in the token, with no database lookup.
+
+### Access states
+
+The gate answers one of three states, not true/false. Only `enabled` goes through:
+
+| state | means | `accessMiddleware` |
+|---|---|---|
+| `enabled` | shown and usable | passes |
+| `disabled` | shown, greyed out, not usable | `403 { code: 'DISABLED' }` |
+| `hidden` | not shown | `403 { code: 'HIDDEN' }` |
+
+Anything else is refused as well: a state the gate does not know never lets a request through.
+
+`accessService.userApiState(userId, apiName)` gives the state; `userHasApiAccess` is still there and is true only for `enabled`. Today a role mapping decides between `enabled` (the user holds a mapped role) and `hidden` (they do not). Nothing yet stores `disabled`, so it does not come out yet; callers should handle it now.
+
+### Every request is checked
+
+An app made with `@xeplr/base-apis`' `createApp` never asks auth only "who is this". Its gate calls `GET /auth/api/verify` for every request it serves, naming that request, and auth answers both the token and the access state. The app has no setting that skips the access half.
+
+```
+GET /auth/api/verify
+Authorization: Bearer <the caller's token>
+x-verify-method: GET
+x-verify-path: /widget-templates/abc
+```
+
+| answer | when |
+|---|---|
+| `200 { user, access, state: 'enabled', api }` | token good, API allowed. `api` is the catalog row it matched, or `null` (not registered, so open) |
+| `403 { code: 'DISABLED' }` · `403 { code: 'HIDDEN' }` | token good, API not allowed |
+| `401` | bad or expired token (the same tolerance and `X-New-Token` sliding as every route) |
+| `400 { code: 'NO_REQUEST' }` | no method or path named: nothing to check, so refused |
+
+**Which row a request is.** A catalog name is `METHOD path` or a bare path (every method), and a path may hold `:params`: `GET /widget-templates/:id` covers `GET /widget-templates/abc`. When several rows fit, more literal segments win, then a row with a method over one without (`lib/apiMatch.js`). The catalog names are cached under `access:api:catalog`, cleared with the other rules.
+
+**Auth's own routes are checked the same way**, in-process: every signed-in route in `/auth/api` and every route in `/auth/api/admin` passes `accessGate()` (exported from `lib/accessMiddleware`) after the token check. Login, register, refresh and the other signed-out routes carry neither.
+
+Three kinds of URL, and who gets them by default:
+
+| kind | groups | default roles |
+|---|---|---|
+| system | `scope = 'system'` | Super Admin only, never mapped to a company role |
+| admin | `users:*`, `access:*`, `settings:*` | Admin (0012); an app maps its own admin role, e.g. BI's CompanyAdmin |
+| user | `account:*`, and an app's `*:view` / `*:create` / `*:edit` | every role that uses them |
+
+These are migration defaults; the Access Matrix changes them.
+
+**The consequence of switching this on:** an API mapped only to Super Admin is refused to everyone else. Map each registered API to every role that uses it.
+
 
 ## Multi-tenancy
 
 `userTenantsMapping` records membership: `userId`, `level` (`l1`–`l4`, matching `mtId1`–`mtId4`), `value` (the app's own id at that level — auth owns no tenant tree), an optional `roleId`, `isActive`. One row per user, level and value.
 
 `@xeplr/db`'s `mtMiddleware` trusts whatever tenant header it is given. `mtMembershipMiddleware` is what checks it: for each configured slot whose header is present, the caller needs an active membership row with that value, or gets `403 Not authorized for <slot> "<value>"`. An absent header is left alone. It does nothing when multi-tenancy is not enabled.
+
+### Roles belong to a company
+
+Two separate questions: **where** a row belongs (`mtId1`) and **who** may use it (`scope`, see [system scope](#system-scope)).
+
+| row | `mtId1` |
+|---|---|
+| APIs, menus, pages, elements | `'*'`, generic: every company |
+| System roles (Super Admin) and the seeded roles | `'*'` |
+| Any other role | the company it was created in, from `AUTH_TENANT_HEADER`, even when Super Admin creates it |
+
+- Creating a company role with no company selected is refused (`400`, `code: 'NO_COMPANY'`).
+- Lists show the current company's roles and the generic ones. Another company's role is not found (`404`) for rename or delete.
+- A role name is unique within its company (`409` otherwise), not across companies.
+- With `AUTH_TENANT_HEADER=none` every role is generic, as before.
+- Roles saved before this (no `mtId1`) are made generic by migration `0010`, so nothing disappears.
+
+**Copy to companies.** Super Admin picks roles in one company and copies them into others: `POST /auth/api/admin/master/roles/copy { roleIds, companyIds }`. Each target gets an **independent** copy, with the same name and the same grants (apis, pages, elements, menus), that it can then change on its own. A company that already has a role of that name keeps its own: the copy is skipped and reported, never overwritten. System roles are not copied.
 
 ```js
 app.use(authMiddleware)                        // needs req.user.id

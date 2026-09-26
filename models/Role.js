@@ -24,6 +24,7 @@ class Role extends BaseModel {
       properties: {
         id: { type: 'string', maxLength: 25 },
         name: { type: ['string', 'null'], maxLength: 255 },
+        scope: { type: 'string', enum: ['system', 'company'] },
         recordCreatedDate: { type: ['string', 'null'] },
         recordModifiedDate: { type: ['string', 'null'] },
         recordCreatedBy: { type: ['string', 'null'], maxLength: 25 },
