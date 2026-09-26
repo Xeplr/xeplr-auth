@@ -39,7 +39,7 @@ class Api extends BaseModel {
         modelClass: Role,
         join: {
           from: 'apis.id',
-          through: { from: 'apisRolesMapping.apiId', to: 'apisRolesMapping.roleId' },
+          through: { from: 'apisRolesMapping.apiId', to: 'apisRolesMapping.roleId', extra: ['state'] },
           to: 'roles.id'
         }
       }

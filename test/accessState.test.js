@@ -18,6 +18,10 @@ test('open APIs are enabled; mapped ones are enabled for a holder, hidden otherw
   assert.equal(apiStateFor({ exists: true, roleIds: ['r1'] }, ['r1']), 'enabled');
   assert.equal(apiStateFor({ exists: true, roleIds: ['r1'] }, ['r2']), 'hidden');
   assert.equal(apiStateFor({ exists: true, roleIds: ['r1'] }, undefined), 'hidden');
+  // A disabled mapping row: shown, not usable. The most open role wins.
+  assert.equal(apiStateFor({ exists: true, roleIds: [], disabledRoleIds: ['r1'] }, ['r1']), 'disabled');
+  assert.equal(apiStateFor({ exists: true, roleIds: ['r2'], disabledRoleIds: ['r1'] }, ['r1', 'r2']), 'enabled');
+  assert.equal(apiStateFor({ exists: true, roleIds: [], disabledRoleIds: ['r1'] }, ['r3']), 'hidden');
 });
 
 test('the middleware lets enabled through and refuses disabled and hidden with their codes', async function() {

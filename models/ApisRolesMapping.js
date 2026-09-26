@@ -20,6 +20,7 @@ class ApisRolesMapping extends BaseModel {
         recordCreatedBy: { type: ['string', 'null'], maxLength: 25 },
         recordModifiedBy: { type: ['string', 'null'], maxLength: 25 },
         isActive: { type: 'boolean' },
+        state: { type: 'string', enum: ['enabled', 'disabled'] },
         mtId1: { type: ['string', 'null'], maxLength: 25 },
         mtId2: { type: ['string', 'null'], maxLength: 25 },
         mtId3: { type: ['string', 'null'], maxLength: 25 },

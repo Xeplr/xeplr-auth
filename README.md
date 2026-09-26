@@ -244,6 +244,7 @@ Auth's own migrations:
 | `0010_system_scope` | `scope` (`system` / `company`) on `apis` and `roles`, `scopeLocked` on `apis`. Super Admin, the role-management routes and the scope switch become `system`; the routes are locked |
 | `0011_verify_api` | the `GET /auth/api/verify` row, public in the catalog |
 | `0012_default_role_access` | auth's own routes mapped to its default roles: `account:*` to every role, `users:*` `access:*` `settings:*` to Admin, system APIs to nobody but Super Admin |
+| `0013_mapping_state` | `state` (`enabled` / `disabled`) on the four role-mapping tables, default `enabled`; the `module-states` and `module-state` rows, mapped to Super Admin and Admin |
 
 ## The first account
 
@@ -474,7 +475,28 @@ The gate answers one of three states, not true/false. Only `enabled` goes throug
 
 Anything else is refused as well: a state the gate does not know never lets a request through.
 
-`accessService.userApiState(userId, apiName)` gives the state; `userHasApiAccess` is still there and is true only for `enabled`. Today a role mapping decides between `enabled` (the user holds a mapped role) and `hidden` (they do not). Nothing yet stores `disabled`, so it does not come out yet; callers should handle it now.
+`accessService.userApiState(userId, apiName)` gives the state; `userHasApiAccess` is still there and is true only for `enabled`.
+
+Where each state comes from, for a role:
+
+| state | stored as |
+|---|---|
+| `hidden` | no mapping row |
+| `enabled` | a mapping row, `state = 'enabled'` (the default) |
+| `disabled` | a mapping row, `state = 'disabled'` (`0013_mapping_state`) |
+
+A user with several roles gets the most open answer: one role with it enabled is enough. Workspace and user overrides are not stored yet.
+
+The access object leaves disabled items out of `apis`, `pages` and `elements` (what callers check) and lists them under `disabled: { apis, pages, elements, menus }`. A disabled menu stays in `menuItems` with `disabled: true`, so a UI can grey it out instead of dropping it.
+
+Set from the Access Matrix, through two admin routes:
+
+| route | |
+|---|---|
+| `GET /module-states?scope=role` | `[{ module, action, roleId, state: 'disabled' }]` for the roles the caller can see |
+| `POST /module-state` | `{ scope: 'role', roleId, module, action, state }`: `disabled` greys out every item of that module/action the role is mapped to; `enabled`, `inherit` or `null` clears it. `hidden` is refused (`BAD_STATE`): hidden is removing the mapping, through `module-role` |
+
+Any other `scope` answers `400 SCOPE_NOT_SUPPORTED`.
 
 ### Every request is checked
 

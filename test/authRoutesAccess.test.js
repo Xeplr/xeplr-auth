@@ -62,7 +62,7 @@ before(async function() {
   knex = knexLib({ client: 'pg', connection: { database: DB } });
   for (var f of ['0001_extensions.sql', '0002_users.sql', '0003_catalog_tables.sql', '0004_role_mappings.sql',
                  '0005_user_tenants_mapping.sql', '0006_seed_catalog.sql', '0007_license_module.sql',
-                 '0009_menu_labels.sql', '0010_system_scope.sql', '0011_verify_api.sql', '0012_default_role_access.sql']) {
+                 '0009_menu_labels.sql', '0010_system_scope.sql', '0011_verify_api.sql', '0012_default_role_access.sql', '0013_mapping_state.sql']) {
     await migrate(f);
   }
   BaseModel.knex(knex);
@@ -123,4 +123,63 @@ test('0012 maps no system API to any role but Super Admin, and re-running change
   var leaked = await knex('apisRolesMapping as m').join('apis as a', 'a.id', 'm.apiId').join('roles as r', 'r.id', 'm.roleId')
     .where('a.scope', 'system').whereIn('r.name', ['Editor', 'Viewer']).count('* as n');
   assert.equal(Number(leaked[0].n), 0);
+});
+
+// ── Disabled: stored on the mapping row, answered by the check ─────────────
+
+test('Disabled for a role: stored, listed, refused by the check, shown greyed, and cleared again', async function(t) {
+  if (skip) return t.skip(skip);
+  var service = require('../lib/accessService');
+  var viewerRole = (await knex('roles').where({ name: 'Viewer' }).first()).id;
+  await knex('apis').insert({ id: 'apireports000000000000001', name: 'GET /reports', apiGroup: 'reports:view', isPublic: false, isActive: true, mtId1: '*' });
+  await knex('menus').insert({ id: 'menureports00000000000001', name: 'Reports', menuGroup: 'reports:view', isPublic: false, isActive: true, mtId1: '*' });
+  await knex('apisRolesMapping').insert({ id: 'mapreports00000000000001', roleId: viewerRole, apiId: 'apireports000000000000001', isActive: true, mtId1: '*' });
+  await knex('menuRolesMapping').insert({ id: 'mnureports00000000000001', roleId: viewerRole, menuId: 'menureports00000000000001', isActive: true, mtId1: '*' });
+  store.clear();
+
+  assert.equal((await service.requestApiState('uviewer', 'GET', '/reports')).state, 'enabled');
+
+  var r = await call(viewer, 'POST', '/auth/api/admin/module-state', { scope: 'role', module: 'reports', action: 'view', roleId: viewerRole, state: 'disabled' });
+  assert.equal(r.status, 403, 'a Viewer cannot change states');
+
+  r = await call(adminUser, 'POST', '/auth/api/admin/module-state', { scope: 'role', module: 'reports', action: 'view', roleId: viewerRole, state: 'disabled' });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.changed, 2, 'the API and the menu of that module/action');
+
+  r = await call(adminUser, 'GET', '/auth/api/admin/module-states?scope=role');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.filter(function(x) { return x.roleId === viewerRole; }),
+    [{ module: 'reports', action: 'view', roleId: viewerRole, state: 'disabled' }]);
+
+  assert.equal((await service.requestApiState('uviewer', 'GET', '/reports')).state, 'disabled');
+
+  var me = (await call(viewer, 'GET', '/auth/api/me')).body.access;
+  assert.equal(me.apis.indexOf('GET /reports'), -1, 'not in the usable list');
+  assert.deepEqual(me.disabled.apis, ['GET /reports']);
+  var menu = me.menuItems.filter(function(m) { return m.name === 'Reports'; })[0];
+  assert.ok(menu, 'still on the rail');
+  assert.equal(menu.disabled, true, 'marked so the UI can grey it out');
+
+  r = await call(adminUser, 'POST', '/auth/api/admin/module-state', { scope: 'role', module: 'reports', action: 'view', roleId: viewerRole, state: null });
+  assert.equal(r.status, 200);
+  assert.equal((await service.requestApiState('uviewer', 'GET', '/reports')).state, 'enabled');
+  me = (await call(viewer, 'GET', '/auth/api/me')).body.access;
+  assert.notEqual(me.apis.indexOf('GET /reports'), -1);
+  assert.deepEqual(me.disabled.apis, []);
+});
+
+test('module states: only roles for now, and hidden is not a state to store', async function(t) {
+  if (skip) return t.skip(skip);
+  var r = await call(adminUser, 'GET', '/auth/api/admin/module-states?scope=workspace&scopeId=w1');
+  assert.equal(r.status, 400); assert.equal(r.body.code, 'SCOPE_NOT_SUPPORTED');
+  r = await call(adminUser, 'POST', '/auth/api/admin/module-state', { scope: 'role', module: 'reports', action: 'view', roleId: 'x', state: 'hidden' });
+  assert.equal(r.status, 400); assert.equal(r.body.code, 'BAD_STATE');
+  r = await call(adminUser, 'POST', '/auth/api/admin/module-state', { scope: 'role', module: 'reports', roleId: 'x', state: 'disabled' });
+  assert.equal(r.status, 400);
+});
+
+test('0013 re-runs without changing anything', async function(t) {
+  if (skip) return t.skip(skip);
+  await migrate('0013_mapping_state.sql');
+  await assert.rejects(knex('apisRolesMapping').update({ state: 'bogus' }).where({ id: 'mapreports00000000000001' }), /state_check/);
 });

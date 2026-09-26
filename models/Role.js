@@ -60,7 +60,7 @@ class Role extends BaseModel {
         modelClass: Api,
         join: {
           from: 'roles.id',
-          through: { from: 'apisRolesMapping.roleId', to: 'apisRolesMapping.apiId' },
+          through: { from: 'apisRolesMapping.roleId', to: 'apisRolesMapping.apiId', extra: ['state'] },
           to: 'apis.id'
         }
       },
@@ -69,7 +69,7 @@ class Role extends BaseModel {
         modelClass: UiPage,
         join: {
           from: 'roles.id',
-          through: { from: 'uiPagesRolesMapping.roleId', to: 'uiPagesRolesMapping.uiPageId' },
+          through: { from: 'uiPagesRolesMapping.roleId', to: 'uiPagesRolesMapping.uiPageId', extra: ['state'] },
           to: 'uiPages.id'
         }
       },
@@ -78,7 +78,7 @@ class Role extends BaseModel {
         modelClass: UiElement,
         join: {
           from: 'roles.id',
-          through: { from: 'uiElementsRolesMapping.roleId', to: 'uiElementsRolesMapping.uiElementId' },
+          through: { from: 'uiElementsRolesMapping.roleId', to: 'uiElementsRolesMapping.uiElementId', extra: ['state'] },
           to: 'uiElements.id'
         }
       },
@@ -87,7 +87,7 @@ class Role extends BaseModel {
         modelClass: Menu,
         join: {
           from: 'roles.id',
-          through: { from: 'menuRolesMapping.roleId', to: 'menuRolesMapping.menuId' },
+          through: { from: 'menuRolesMapping.roleId', to: 'menuRolesMapping.menuId', extra: ['state'] },
           to: 'menus.id'
         }
       }

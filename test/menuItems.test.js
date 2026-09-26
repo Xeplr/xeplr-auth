@@ -54,7 +54,7 @@ before(async function() {
   await admin.raw('DROP DATABASE IF EXISTS ??', [DB]);
   await admin.raw('CREATE DATABASE ??', [DB]);
   knex = knexLib({ client: 'pg', connection: { database: DB } });
-  for (var f of ['0001_extensions.sql', '0002_users.sql', '0003_catalog_tables.sql', '0004_role_mappings.sql', '0009_menu_labels.sql', '0010_system_scope.sql']) {
+  for (var f of ['0001_extensions.sql', '0002_users.sql', '0003_catalog_tables.sql', '0004_role_mappings.sql', '0009_menu_labels.sql', '0010_system_scope.sql', '0013_mapping_state.sql']) {
     await knex.raw(fs.readFileSync(path.join(__dirname, '..', 'migrations', f), 'utf8'));
   }
   BaseModel.knex(knex);
