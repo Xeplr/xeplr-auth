@@ -537,7 +537,7 @@ These are migration defaults; the Access Matrix changes them.
 
 `userTenantsMapping` records membership: `userId`, `level` (`l1`–`l4`, matching `mtId1`–`mtId4`), `value` (the app's own id at that level — auth owns no tenant tree), an optional `roleId`, `isActive`. One row per user, level and value.
 
-`@xeplr/db`'s `mtMiddleware` trusts whatever tenant header it is given. `mtMembershipMiddleware` is what checks it: for each configured slot whose header is present, the caller needs an active membership row with that value, or gets `403 Not authorized for <slot> "<value>"`. An absent header is left alone. It does nothing when multi-tenancy is not enabled.
+`@xeplr/db`'s `mtMiddleware` trusts whatever tenant header it is given. `mtMembershipMiddleware` is what checks it: for each configured slot whose header is present, the caller needs an active membership row with that value, or gets `403 Not authorized for <slot> "<value>"`. An absent header is left alone. It does nothing when multi-tenancy is not enabled. **Super Admin passes whatever the headers say**: the role runs the whole install, so it goes into every company and workspace without a membership row.
 
 ### Roles belong to a company
 
