@@ -91,6 +91,7 @@ await auth.service.invite({ email, name, invitedBy, inviterName, appName })
 | `ticketService` | `issueTicket`, `consumeTicket` — single-use 30-second tickets for SSE / WebSocket |
 | `authHelper` | `configure`, `hashPassword`, `comparePassword`, `generateAccessToken`, `verifyToken`, `decodeVerified`, `generateId`, … |
 | `hooks` | `on(identifier, event, fn)`, `fire`, `setHooksEnabled` |
+| `licence` | `use({ modulesFor })`: which sold modules a user may use — see [Licensed modules](#licensed-modules) |
 | `seedSuperAdmin(knex, { email, password, name? })` | insert-if-absent super admin user + role mapping, for apps seeding from JS |
 | `configureWorkflowResume(fn)` | hand in `@xeplr-workflow/api`'s `resumeByKey`; activation with a `workflowKey` then resumes that workflow (best-effort) |
 | `requiredEnv` | the env names this package needs, for an app's `env.required.js`; `requiredEnv.activationLinkVar` names the activation-link variable in use |
@@ -465,13 +466,14 @@ Pass `apiNameResolver(req)` to name APIs differently. Because unregistered means
 
 ### Access states
 
-The gate answers one of three states, not true/false. Only `enabled` goes through:
+The gate answers one of four states, not true/false. Only `enabled` goes through:
 
 | state | means | `accessMiddleware` |
 |---|---|---|
 | `enabled` | shown and usable | passes |
 | `disabled` | shown, greyed out, not usable | `403 { code: 'DISABLED' }` |
 | `hidden` | not shown | `403 { code: 'HIDDEN' }` |
+| `unlicensed` | not shown: the API's module is not in the user's licence | `403 { code: 'UNLICENSED' }` |
 
 Anything else is refused as well: a state the gate does not know never lets a request through.
 
@@ -513,6 +515,7 @@ x-verify-path: /widget-templates/abc
 |---|---|
 | `200 { user, access, state: 'enabled', api }` | token good, API allowed. `api` is the catalog row it matched, or `null` (not registered, so open) |
 | `403 { code: 'DISABLED' }` · `403 { code: 'HIDDEN' }` | token good, API not allowed |
+| `403 { code: 'UNLICENSED' }` | token good, but the API belongs to a module the user's licence does not include |
 | `401` | bad or expired token (the same tolerance and `X-New-Token` sliding as every route) |
 | `400 { code: 'NO_REQUEST' }` | no method or path named: nothing to check, so refused |
 
@@ -532,6 +535,30 @@ These are migration defaults; the Access Matrix changes them.
 
 **The consequence of switching this on:** an API mapped only to Super Admin is refused to everyone else. Map each registered API to every role that uses it.
 
+
+### Licensed modules
+
+Every catalog row (`apis`, `menus`, `uiPages`, `uiElements`) carries a `licenseModule` (`0007_license_module`):
+- **`core`** is the default: sign-in, company selection, and anything that belongs to no product.
+- **Anything else** names the product the row was sold as: `bi`, `warehouse`, `xflow`, and so on.
+
+Roles say what a user's job lets them do; the licence says what was paid for. Access needs both.
+
+What was paid for is the host's to say, not this library's. An on-premises install reads it from its licence, and a SaaS app from its billing. The host registers one function in the auth process, in the same boot file as [hooks](#hooks):
+
+```js
+var auth = require('@xeplr/auth')
+auth.licence.use({
+  modulesFor: async function(userId) { return ['bi', 'warehouse'] }   // this user's modules
+})
+auth.boot()
+```
+
+- **Nothing registered:** no filtering. Every module is allowed, exactly as before.
+- **`core` is always allowed,** whatever the function answers: a user who cannot sign in cannot be told they are unlicensed.
+- **APIs:** an API of another module is `unlicensed`, which `/verify`, `accessMiddleware` and `accessGate` answer with `403 UNLICENSED`. This is checked before roles, so no role mapping, public flag or missing mapping gets past it.
+- **The access object:** it leaves those rows out entirely (`apis`, `pages`, `elements`, `menus`, public ones included). They are not greyed out: the product was not bought.
+- **Timing:** the answer is folded into the user's cached access (5 minutes). A change, such as a seat given or taken, reaches the user within that, or at once after `accessService.clearUserAccess(userId)`.
 
 ## Multi-tenancy
 

@@ -8,7 +8,7 @@ var service = require('../lib/accessService');
 var { ACCESS_STATES, apiStateFor } = service;
 
 test('three states', function() {
-  assert.deepEqual(ACCESS_STATES, ['enabled', 'disabled', 'hidden']);
+  assert.deepEqual(ACCESS_STATES, ['enabled', 'disabled', 'hidden', 'unlicensed']);
 });
 
 test('open APIs are enabled; mapped ones are enabled for a holder, hidden otherwise', function() {

@@ -18,6 +18,7 @@ const { accessMiddleware, requireRole } = require('./lib/accessMiddleware');
 const sessionService = require('./lib/sessionService');
 const ticketService = require('./lib/ticketService');
 const hooks = require('./lib/hooks');
+const licence = require('./lib/licence');
 const mtMembershipMiddleware = require('./lib/mtMembershipMiddleware');
 const createAuthRouter = require('./lib/authRouter');
 const createAdminRouter = require('./lib/adminRouter');
@@ -426,5 +427,6 @@ module.exports = {
   sessionService,
   ticketService,
   hooks,
+  licence,
   models
 };
