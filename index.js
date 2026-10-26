@@ -111,8 +111,8 @@ async function start(config = {}) {
     //
     // Not a hole. createAuthRouter gates its own protected routes per-route
     // with authMiddleware (/me, /profile, /change-password, /sse-ticket, and
-    // all of /admin). What is left open — login, register, activate, refresh,
-    // forgot/reset-password — is open by design, because it is how a caller
+    // all of /admin). What is left open — login, register, resend-activation,
+    // activate, refresh, forgot/reset-password — is open by design, because it is how a caller
     // obtains a token in the first place.
     auth: false,
     corsOptions: config.corsOptions,
@@ -217,11 +217,15 @@ async function boot() {
   // reset) cannot be sent, and the banner says so rather than the first
   // person to register finding out.
   var email = await emailStatus();
+  // Registration and reset refuse up front when mail is known not to work,
+  // instead of creating an account whose link never goes out.
+  authService.configureEmailStatus(email.unknown ? null : email.ok);
   authService.configureActivation({
     // Fully qualified, one per link — the token is the only thing appended.
     // AUTH_ACTIVATION_BASE_URL still works as an origin; see configureActivation.
     activationUrl: process.env.AUTH_ACTIVATION_URL || null,
     inviteUrl: process.env.AUTH_INVITE_URL || null,
+    resetUrl: process.env.AUTH_RESET_URL || null,
     baseUrl: process.env.AUTH_ACTIVATION_BASE_URL || null
   });
 
@@ -251,9 +255,9 @@ async function emailStatus() {
 
 function warnNoEmail(email) {
   console.warn('[xeplr-auth] EMAIL IS NOT WORKING — ' + String(email.detail).replace(/\.$/, '') + '.');
-  console.warn('             Sign-in keeps working. Registration, invites and password');
-  console.warn('             resets cannot send their links until this is fixed: set');
-  console.warn('             EMAIL_PROVIDER (smtp, brevo, aws or azure) and its settings.\n');
+  console.warn('             Sign-in keeps working. Registration, resending activation links,');
+  console.warn('             invites and password resets are refused until this is fixed:');
+  console.warn('             set EMAIL_PROVIDER (smtp, brevo, aws or azure) and its settings.\n');
 }
 
 function describeEmail(email) {
@@ -274,6 +278,8 @@ function banner(email) {
     [migrationsVar('auth'), migrationsFor('auth') || '(none)'],
     ['activation url',     process.env.AUTH_ACTIVATION_URL || process.env.AUTH_ACTIVATION_BASE_URL || '(none)'],
     ['invite url',         process.env.AUTH_INVITE_URL || '(derived)'],
+    ['reset url',          process.env.AUTH_RESET_URL || (process.env.AUTH_ACTIVATION_BASE_URL ? '(derived)' : '✗ NOT SET, password reset refused')],
+    ['sign-up roles',      process.env.AUTH_REGISTER_ROLES || '✗ NOT SET, registration refused'],
     ['access token ttl',   (process.env.AUTH_ACCESS_TOKEN_TTL_MINUTES || '15') + 'm'],
     ['refresh token ttl',  (process.env.AUTH_REFRESH_TOKEN_TTL_DAYS || '7') + 'd'],
     ['slide tolerance',    (process.env.AUTH_ACCESS_TOKEN_TOLERANCE_SECONDS || '0') + 's'],
@@ -326,6 +332,7 @@ function attach() {
     // AUTH_ACTIVATION_BASE_URL still works as an origin; see configureActivation.
     activationUrl: process.env.AUTH_ACTIVATION_URL || null,
     inviteUrl: process.env.AUTH_INVITE_URL || null,
+    resetUrl: process.env.AUTH_RESET_URL || null,
     baseUrl: process.env.AUTH_ACTIVATION_BASE_URL || null
   });
     return _conn;
@@ -348,11 +355,6 @@ function attach() {
 var requiredEnv = [
   'ENCRYPTION_KEY',
   'AUTH_JWT_SECRET',
-  // NOT listed literally: the activation link can be given either as
-  // AUTH_ACTIVATION_URL (fully qualified, preferred) or as the older
-  // AUTH_ACTIVATION_BASE_URL (an origin). checkEnv takes a list of names and
-  // demands every one, which would refuse to boot an install that configured
-  // the new form. The getter below asks for whichever is actually in use.
   'AUTH_PORT',
   'AUTH_DB_NAME',                        // auth db (api reaches it via attach())
   'XEPLR_AUTH_MIGRATIONS',             // migrations run via migrate:up
@@ -380,11 +382,33 @@ var requiredEnv = [
   // forgot it would create every role as '*' — visible to every company —
   // and nothing would look wrong. See lib/tenant.js.
   'AUTH_TENANT_HEADER',
+
+  // THE SIGN-UP FLOW. Without these the service starts and signs people in,
+  // but nobody new can get in: registration, activation and password reset
+  // each refuse. That shows up as the first person to register finding out,
+  // so it is refused here, before anything starts. See README "Sign-up and
+  // activation".
+  //
+  // The role a new account gets when it is activated — no default, each app
+  // names its own (e.g. Viewer).
+  'AUTH_REGISTER_ROLES',
+
+  // The two links that go out by email. Each can be given fully qualified
+  // (preferred) or derived from the older AUTH_ACTIVATION_BASE_URL origin, so
+  // the name asked for is whichever form this install uses: demanding the new
+  // name would refuse an install correctly configured the old way.
+  linkVar('AUTH_ACTIVATION_URL'),
+  linkVar('AUTH_RESET_URL'),
 ];
 
-// Read at ACCESS time so it reflects the .env the app has already loaded — the
-// same reason @xeplr/email's requiredEnv is a getter. Names the form the
-// install is actually using, and asks for the new one when neither is set.
+// Decided when this module loads, which is after the launcher (dotenv -e …)
+// has filled process.env — so the list names the form actually in use.
+function linkVar(name) {
+  return process.env.AUTH_ACTIVATION_BASE_URL && !process.env[name] ? 'AUTH_ACTIVATION_BASE_URL' : name;
+}
+
+// Kept for callers that read it; the list above now carries the same name.
+// Read at ACCESS time so it reflects the .env the app has already loaded.
 Object.defineProperty(requiredEnv, 'activationLinkVar', {
   enumerable: false,
   get: function () {
