@@ -101,7 +101,7 @@ await auth.service.invite({ email, name, invitedBy, inviterName, appName })
 
 ### Required
 
-Everything in `requiredEnv`, plus a connection and an activation link.
+Everything in `requiredEnv`, plus a connection. `requiredEnv` includes the sign-up settings — `AUTH_REGISTER_ROLES`, `AUTH_ACTIVATION_URL` and `AUTH_RESET_URL` — so an app that spreads it into its `env.required.js` refuses to start (and `check-env` fails) without them: the sign-in service would run, but nobody new could get in. The two link settings are asked for as `AUTH_ACTIVATION_BASE_URL` instead when an install uses that older form. Started without them anyway, each flow refuses with `503` naming the variable, and the banner shows `✗ NOT SET`.
 
 | variable | default in code | meaning |
 |---|---|---|
@@ -115,14 +115,17 @@ Everything in `requiredEnv`, plus a connection and an activation link.
 | `AUTH_SUPER_ADMIN_PASSWORD` | — | its password; no quotes, spaces, `$` or `#` (substituted into SQL) |
 | `XEPLR_AUTH_MIGRATIONS` | none | comma-separated app migration directories, run after auth's own — [details](#migrations) |
 | `AUTH_TENANT_HEADER` | — | the header that names the company a role is created in (e.g. `x-company-id`), or `none` for a single-tenant app. No default: a multi-tenant app that forgot it would make every role visible to every company — [details](#roles-belong-to-a-company) |
-| `AUTH_ACTIVATION_URL` | — | full address of your activation page, e.g. `http://localhost:19100/auth/activate`; `?token=…` is appended. The older `AUTH_ACTIVATION_BASE_URL` (below) also satisfies it — `requiredEnv.activationLinkVar` names whichever the install uses. The service starts without it, but registration fails |
+| `AUTH_ACTIVATION_URL` | — | full address of your activation page, e.g. `http://localhost:19100/auth/activate`; `?token=…` is appended. The older `AUTH_ACTIVATION_BASE_URL` (below) also satisfies it — `requiredEnv.activationLinkVar` names whichever the install uses. Without it registration and resend-activation are refused |
+| `AUTH_REGISTER_ROLES` | — (refused) | the role(s) a self-registered account gets when it is activated, comma-separated, e.g. `Viewer`. **No default, on purpose:** an account with no role has every role-mapped API hidden — its own profile included — so it can sign in and do nothing. Which role fits is each app's decision. Unset, a name that is not a generic (`mtId1 = '*'`) role, or a system role (Super Admin) → registration is refused |
+| `AUTH_RESET_URL` | — (refused) | full address of your reset-password page, e.g. `http://localhost:19100/auth/reset-password`; `?token=…` is appended. Derived from `AUTH_ACTIVATION_BASE_URL` when only that is set. **Never taken from the request:** a link built from the `Host` header lets anyone have us mail a real user a reset link to their own site. Unset → forgot-password is refused |
+| email (`EMAIL_PROVIDER` + its settings, below) | — | registration, resend-activation, invites and password reset all send a link. `boot()` checks mail at startup; when it is known not to work those routes refuse up front (`503`, `EMAIL_NOT_SET_UP`) rather than create an account whose link never goes out |
 
 ### Optional
 
 | variable | default | meaning |
 |---|---|---|
 | `AUTH_INVITE_URL` | derived | full address of your accept-invite page; `?token=…` is appended |
-| `AUTH_ACTIVATION_BASE_URL` | — | older form: an origin; `/auth/activate` and `/auth/accept-invite` are appended when the two URLs above are unset |
+| `AUTH_ACTIVATION_BASE_URL` | — | older form: an origin; `/auth/activate`, `/auth/accept-invite` and `/auth/reset-password` are appended when the URLs above are unset |
 | `AUTH_ACCESS_TOKEN_TTL_MINUTES` | `15` | access token lifetime |
 | `AUTH_REFRESH_TOKEN_TTL_DAYS` | `7` | refresh token (session) lifetime |
 | `AUTH_ACCESS_TOKEN_TOLERANCE_SECONDS` | `0` | grace after expiry during which a token is still served and slid; `0` turns sliding refresh off |
@@ -246,6 +249,7 @@ Auth's own migrations:
 | `0011_verify_api` | the `GET /auth/api/verify` row, public in the catalog |
 | `0012_default_role_access` | auth's own routes mapped to its default roles: `account:*` to every role, `users:*` `access:*` `settings:*` to Admin, system APIs to nobody but Super Admin |
 | `0013_mapping_state` | `state` (`enabled` / `disabled`) on the four role-mapping tables, default `enabled`; the `module-states` and `module-state` rows, mapped to Super Admin and Admin |
+| `0014_activation_routes` | rows for `resend-activation` (public) and `admin/users/:id/activate` (`users:edit` → Super Admin, Admin), plus three routes that shipped without one: `invite-preview` and `invite-accept` (public) and `sse-ticket` (`account:view` → every base role — before this it was open to anyone); the public `Resend Activation` and `Accept Invite` pages |
 
 ## The first account
 
@@ -282,19 +286,27 @@ Client code must read the header and replace its stored token, or the session en
 
 ## Routes
 
+### Sign-up and activation
+
+1. **Register** — every check that can refuse runs *before* the account is written, and the activation mail is sent inside the same transaction, so a refusal or a failed send leaves nothing behind.
+2. **Activate** — by the emailed link, or by an admin (`POST /admin/users/:id/activate`). Both grant the `AUTH_REGISTER_ROLES` roles in the same transaction, so an activated account always has a role.
+3. **Lost the mail?** `POST /resend-activation` sends a new link.
+4. **Invited people** set their password on the accept-invite page (`/invite-preview`, `/invite-accept`); they get whatever roles the inviter grants, not the sign-up roles.
+
 ### `/auth/api`
 
 | route | token | body / query → response |
 |---|---|---|
-| `POST /register` | — | `{ email, password, name?, phoneNumber? }` → `201 { message, user }`; `409` if the email is registered. Sends the activation email |
-| `GET /activate` | — | `?token=…&workflowKey=…` → `{ message, user }` |
+| `POST /register` | — | `{ email, password, name?, phoneNumber? }` → `201 { message, user }`; `409` if the email is registered. Sends the activation email. `503 { error, code }` when a sign-up setting is missing or the mail cannot be sent — in every such case **no account is created**, so trying again works |
+| `POST /resend-activation` | — | `{ email }` → the same message whether or not the address has an account waiting; sends a new link and the old one stops working. Invited accounts are skipped (they use their invite link) |
+| `GET /activate` | — | `?token=…&workflowKey=…` → `{ message, user }`; grants the `AUTH_REGISTER_ROLES` roles. An invite token is refused here (it would leave an account with no password) |
 | `GET /invite-preview` | — | `?token=…` → `{ email, name }` |
 | `POST /invite-accept` | — | `{ token, password, name? }` → sets the password and activates |
-| `POST /login` | — | `{ email, password }` → `{ accessToken, refreshToken, user, access }`; `401` wrong password or deactivated; `403` not yet activated |
+| `POST /login` | — | `{ email, password }` → `{ accessToken, refreshToken, user, access }`; `401` wrong password or deactivated (an invited account with no password yet is a wrong password); `403 { error, code: 'NOT_ACTIVATED' }` not yet activated — check `code`, not the wording |
 | `POST /refresh` | — | `{ refreshToken }` → a new `{ accessToken, refreshToken, user, access }` |
 | `POST /logout` | — | `{ refreshToken }` → ends that session |
-| `POST /forgot-password` | — | `{ email }` → the same message whether or not the address exists; emails `<resetBaseUrl>/auth/reset-password?token=…` (the request's own origin when no `resetBaseUrl` is given — `boot()` gives none) |
-| `POST /reset-password` | — | `{ token, newPassword }` |
+| `POST /forgot-password` | — | `{ email }` → the same message whether or not the address exists; emails `AUTH_RESET_URL?token=…` (or `<resetBaseUrl>/auth/reset-password` when the router is given `resetBaseUrl`). `503` for every address alike when the reset address or mail is not set up |
+| `POST /reset-password` | — | `{ token, newPassword }`; `400` once the link is older than `AUTH_RESET_TOKEN_EXPIRY_MINUTES` |
 | `GET /me` | ✓ | `{ user, access }` — `user` is the token's claims |
 | `GET /verify` | ✓ | the check every app's gate makes on every request — see [Every request is checked](#every-request-is-checked) |
 | `GET /profile` · `PUT /profile` | ✓ | `{ id, email, name, phoneNumber, phoneVerified, profilePicUrl, isActivated }`; PUT takes `name`, `phoneNumber`, `email` |
@@ -310,7 +322,8 @@ Client code must read the header and replace its stored token, or the session en
 
 | route | |
 |---|---|
-| `GET /users` | users with their roles |
+| `GET /users` | users with their roles, `isActivated`, and `invitePending` (invited, no password set yet — they activate by accepting the invite) |
+| `POST /users/:id/activate` | `users:edit` — activates an account without its emailed link and grants the `AUTH_REGISTER_ROLES` roles; `409` if already activated or invited without a password yet |
 | `GET /roles` | `[{ id, name, scope, mtId1 }]`: the current company's roles and the generic ones; system roles only for Super Admin |
 | `GET /access-items` | `{ apis, pages, elements, menus }`, each with its roles |
 | `POST /user-role` | `{ userId, roleId, assign }` — grant or remove a role |
@@ -615,6 +628,8 @@ Hooks run in the process that did the work — register them in the same script 
 ```sh
 npm test          # node --test test/*.test.js
 ```
+
+`test/signUpFlow.test.js` runs the whole sign-up flow over HTTP against a local PostgreSQL and Redis, with real mail: nodemailer (the workspace dev dependency) talks SMTP to a small listener inside the test. It is skipped when any of the three is missing.
 
 `test/menuItems.test.js` needs a local PostgreSQL (the usual `PG*` variables): it creates and drops a throwaway database, and is skipped when none is reachable. The token-decision and `REDIS_PREFIX` tests need nothing.
 
