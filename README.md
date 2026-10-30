@@ -522,15 +522,20 @@ GET /auth/api/verify
 Authorization: Bearer <the caller's token>
 x-verify-method: GET
 x-verify-path: /widget-templates/abc
+x-verify-tenant: {"l1":"<company>","l2":"<workspace>"}     ← when the request names one
 ```
+
+**And whether the user belongs to the company and workspace the request names.** The gate sends them as `x-verify-tenant`, by level (`l1`–`l4`, as memberships are kept — auth needs no app's header names). A user without an active membership for each is refused here, `403 NOT_A_MEMBER`, before the app sees the request; Super Admin belongs to every one. This is the same check as `mtMembershipMiddleware` (`refusedTenant`, one function), so an app on `createApp` never adds it route by route. The answer carries `tenant: 'checked'` whenever it checked, so a gate can refuse an older auth that would have ignored the header.
 
 | answer | when |
 |---|---|
-| `200 { user, access, state: 'enabled', api }` | token good, API allowed. `api` is the catalog row it matched, or `null` (not registered, so open) |
+| `200 { user, access, state: 'enabled', api, tenant? }` | token good, API allowed (and, with `x-verify-tenant`, a member of each: `tenant: 'checked'`). `api` is the catalog row it matched, or `null` (not registered, so open) |
 | `403 { code: 'DISABLED' }` · `403 { code: 'HIDDEN' }` | token good, API not allowed |
 | `403 { code: 'UNLICENSED' }` | token good, but the API belongs to a module the user's licence does not include |
 | `401` | bad or expired token (the same tolerance and `X-New-Token` sliding as every route) |
 | `400 { code: 'NO_REQUEST' }` | no method or path named: nothing to check, so refused |
+| `403 { code: 'NOT_A_MEMBER' }` | token good, but no membership for a company or workspace in `x-verify-tenant` |
+| `400 { code: 'BAD_TENANT' }` | `x-verify-tenant` is not `{ "l1": "<id>", … }` of known levels: refused, never read past |
 
 **Which row a request is.** A catalog name is `METHOD path` or a bare path (every method), and a path may hold `:params`: `GET /widget-templates/:id` covers `GET /widget-templates/abc`. When several rows fit, more literal segments win, then a row with a method over one without (`lib/apiMatch.js`). The catalog names are cached under `access:api:catalog`, cleared with the other rules.
 
@@ -630,6 +635,8 @@ npm test          # node --test test/*.test.js
 ```
 
 `test/signUpFlow.test.js` runs the whole sign-up flow over HTTP against a local PostgreSQL and Redis, with real mail: nodemailer (the workspace dev dependency) talks SMTP to a small listener inside the test. It is skipped when any of the three is missing.
+
+`test/verifyTenant.test.js` checks the membership answer on real memberships (local PostgreSQL and Redis; skipped without either): a member of company and workspace passes and is told `tenant: 'checked'`; another company, another workspace and a switched-off membership are `403 NOT_A_MEMBER`; Super Admin passes; a request naming none is not checked and does not claim to be; an unreadable `x-verify-tenant` is `400 BAD_TENANT`.
 
 `test/menuItems.test.js` needs a local PostgreSQL (the usual `PG*` variables): it creates and drops a throwaway database, and is skipped when none is reachable. The token-decision and `REDIS_PREFIX` tests need nothing.
 
