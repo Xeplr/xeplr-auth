@@ -307,7 +307,7 @@ Client code must read the header and replace its stored token, or the session en
 | `POST /logout` | — | `{ refreshToken }` → ends that session |
 | `POST /forgot-password` | — | `{ email }` → the same message whether or not the address exists; emails `AUTH_RESET_URL?token=…` (or `<resetBaseUrl>/auth/reset-password` when the router is given `resetBaseUrl`). `503` for every address alike when the reset address or mail is not set up |
 | `POST /reset-password` | — | `{ token, newPassword }`; `400` once the link is older than `AUTH_RESET_TOKEN_EXPIRY_MINUTES` |
-| `GET /me` | ✓ | `{ user, access }` — `user` is the token's claims |
+| `GET /me` | ✓ | `{ user, access }` — `user` is the token's claims. With `x-verify-tenant` (`{ "l1": "<company>", "l2": "<workspace>" }`), `access` is as the user is there: their own roles plus the ones their membership gives them ([roles held in a company](#roles-held-in-a-company-or-workspace)). Not a member: `403 NOT_A_MEMBER`; unreadable: `400 BAD_TENANT` |
 | `GET /verify` | ✓ | the check every app's gate makes on every request — see [Every request is checked](#every-request-is-checked) |
 | `GET /profile` · `PUT /profile` | ✓ | `{ id, email, name, phoneNumber, phoneVerified, profilePicUrl, isActivated }`; PUT takes `name`, `phoneNumber`, `email` |
 | `POST /profile/avatar` | ✓ | multipart `avatar`, an image up to 2 MB; stores the file name only — serving `UPLOAD_DIR` is the app's job |
@@ -584,6 +584,15 @@ auth.boot()
 
 `@xeplr/db`'s `mtMiddleware` trusts whatever tenant header it is given. `mtMembershipMiddleware` is what checks it: for each configured slot whose header is present, the caller needs an active membership row with that value, or gets `403 Not authorized for <slot> "<value>"`. An absent header is left alone. It does nothing when multi-tenancy is not enabled. **Super Admin passes whatever the headers say**: the role runs the whole install, so it goes into every company and workspace without a membership row.
 
+### Roles held in a company or workspace
+
+A membership row's `roleId` is the role the user holds **there**. Whenever a request names that company or workspace, the roles that count are the user's own roles **plus** the roles on their own membership rows for the values it names. Outside it they don't apply. **Whoever creates a company is its CompanyAdmin this way** (Xeplr BI grants it when the company is made), while their own role stays what it was everywhere else: a self-registered Viewer is a Viewer on the platform and the admin of the one company they made.
+
+- **Where it counts:** `/verify` (with `x-verify-tenant`, as an app's gate sends it), `/me` (with the same header), `accessMiddleware` and `accessGate` (`x-verify-tenant`, else the app's own MT headers when the process registered them, `tenantsOfRequest`). One function, `accessService.tenantRoleIdsOf(userId, tenants)`.
+- **Naming a company gives nothing by itself.** Only the user's own active rows are read, so a header naming another company finds no role there; `/verify` and `/me` refuse it as `NOT_A_MEMBER` first.
+- **A company role counts in all of its workspaces**, a workspace role only in that workspace: a request naming `{ l1, l2 }` reads both rows.
+- **Cached per user and tenant** under `access:user:<id>:…`, 5 minutes. After changing a membership's role, `clearUserAccess(userId)` makes it count at once.
+
 ### Roles belong to a company
 
 Two separate questions: **where** a row belongs (`mtId1`) and **who** may use it (`scope`, see [system scope](#system-scope)).
@@ -635,6 +644,8 @@ npm test          # node --test test/*.test.js
 ```
 
 `test/signUpFlow.test.js` runs the whole sign-up flow over HTTP against a local PostgreSQL and Redis, with real mail: nodemailer (the workspace dev dependency) talks SMTP to a small listener inside the test. It is skipped when any of the three is missing.
+
+`test/scopedRoles.test.js` checks roles held in a company or workspace (local PostgreSQL and Redis; skipped without either): the company a Viewer created lets them import there and only there (`HIDDEN` naming none, or another company where they are a plain member; `NOT_A_MEMBER` naming a stranger's); a workspace role counts in that workspace and the company role in all of its workspaces; `/me` answers as the user is in the company named; a role taken away is gone after `clearUserAccess`; an app running auth in-process (`accessMiddleware`) reads the company from the request.
 
 `test/verifyTenant.test.js` checks the membership answer on real memberships (local PostgreSQL and Redis; skipped without either): a member of company and workspace passes and is told `tenant: 'checked'`; another company, another workspace and a switched-off membership are `403 NOT_A_MEMBER`; Super Admin passes; a request naming none is not checked and does not claim to be; an unreadable `x-verify-tenant` is `400 BAD_TENANT`.
 
