@@ -68,7 +68,7 @@ To act on auth tables from another service (invite a user, assign roles) while a
 var auth = require('@xeplr/auth').attach()           // AUTH_DB_NAME + the connection env
 await auth.ready()
 await auth.model('UserRolesMapping').query().insert({ /* … */ })
-await auth.service.invite({ email, name, invitedBy, inviterName, appName })
+await auth.service.invite({ email, name, invitedBy, inviterName, appName })  // → { id, isNew, isActivated, resent? } — not yet activated: the invite goes again
 ```
 
 ## Exports
@@ -292,6 +292,7 @@ Client code must read the header and replace its stored token, or the session en
 2. **Activate** — by the emailed link, or by an admin (`POST /admin/users/:id/activate`). Both grant the `AUTH_REGISTER_ROLES` roles in the same transaction, so an activated account always has a role.
 3. **Lost the mail?** `POST /resend-activation` sends a new link.
 4. **Invited people** set their password on the accept-invite page (`/invite-preview`, `/invite-accept`); they get whatever roles the inviter grants, not the sign-up roles.
+5. **Nobody is left stuck.** Inviting an address whose account is **not activated** sends the invite **again** — a fresh link, the old one stops working (`invite()` answers `resent: true`); an activated account is left alone. And a completed **password reset activates** an account that never was: the reset link proves the address just as an activation or invite link does. Invited (no password until the reset): activated as accepting the invite would. Signed up: activated as the emailed link would, with the sign-up roles. A password set meanwhile does not block accepting an invite.
 
 ### `/auth/api`
 
@@ -300,13 +301,13 @@ Client code must read the header and replace its stored token, or the session en
 | `POST /register` | — | `{ email, password, name?, phoneNumber? }` → `201 { message, user }`; `409` if the email is registered. Sends the activation email. `503 { error, code }` when a sign-up setting is missing or the mail cannot be sent — in every such case **no account is created**, so trying again works |
 | `POST /resend-activation` | — | `{ email }` → the same message whether or not the address has an account waiting; sends a new link and the old one stops working. Invited accounts are skipped (they use their invite link) |
 | `GET /activate` | — | `?token=…&workflowKey=…` → `{ message, user }`; grants the `AUTH_REGISTER_ROLES` roles. An invite token is refused here (it would leave an account with no password) |
-| `GET /invite-preview` | — | `?token=…` → `{ email, name }` |
+| `GET /invite-preview` | — | `?token=…` → `{ email, name }` for an account not yet activated (a password set by a reset meanwhile does not matter) |
 | `POST /invite-accept` | — | `{ token, password, name? }` → sets the password and activates |
 | `POST /login` | — | `{ email, password }` → `{ accessToken, refreshToken, user, access }`; `401` wrong password or deactivated (an invited account with no password yet is a wrong password); `403 { error, code: 'NOT_ACTIVATED' }` not yet activated — check `code`, not the wording |
 | `POST /refresh` | — | `{ refreshToken }` → a new `{ accessToken, refreshToken, user, access }` |
 | `POST /logout` | — | `{ refreshToken }` → ends that session |
 | `POST /forgot-password` | — | `{ email }` → the same message whether or not the address exists; emails `AUTH_RESET_URL?token=…` (or `<resetBaseUrl>/auth/reset-password` when the router is given `resetBaseUrl`). `503` for every address alike when the reset address or mail is not set up |
-| `POST /reset-password` | — | `{ token, newPassword }`; `400` once the link is older than `AUTH_RESET_TOKEN_EXPIRY_MINUTES` |
+| `POST /reset-password` | — | `{ token, newPassword }`; `400` once the link is older than `AUTH_RESET_TOKEN_EXPIRY_MINUTES`. Activates an account that was never activated (the link proves the address) |
 | `GET /me` | ✓ | `{ user, access }` — `user` is the token's claims. With `x-verify-tenant` (`{ "l1": "<company>", "l2": "<workspace>" }`), `access` is as the user is there: their own roles plus the ones their membership gives them ([roles held in a company](#roles-held-in-a-company-or-workspace)). Not a member: `403 NOT_A_MEMBER`; unreadable: `400 BAD_TENANT` |
 | `GET /verify` | ✓ | the check every app's gate makes on every request — see [Every request is checked](#every-request-is-checked) |
 | `GET /profile` · `PUT /profile` | ✓ | `{ id, email, name, phoneNumber, phoneVerified, profilePicUrl, isActivated }`; PUT takes `name`, `phoneNumber`, `email` |
