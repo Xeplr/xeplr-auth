@@ -179,6 +179,25 @@ test('register refuses a sign-up role that does not exist, or is a system role',
   }
 });
 
+test('the sign-up role is found in any case: "viewer" is Viewer, and a system role in any case is still refused', async function(t) {
+  if (skip) return t.skip(skip);
+  try {
+    process.env.AUTH_REGISTER_ROLES = ' viewer ';
+    var r = await call('POST', '/auth/api/register', { email: 'anycase@signup.test', password: 'pw-anycase' });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    await call('GET', '/auth/api/activate?token=' + tokenOf(lastLink()));
+    var roles = await knex('userRolesMapping').join('roles', 'roles.id', 'userRolesMapping.roleId').where('userRolesMapping.userId', r.body.user.id).pluck('roles.name');
+    assert.deepEqual(roles, ['Viewer']);
+
+    process.env.AUTH_REGISTER_ROLES = 'super admin';
+    r = await call('POST', '/auth/api/register', { email: 'anycase2@signup.test', password: 'pw' });
+    assert.equal(r.status, 503);
+    assert.equal(r.body.code, 'REGISTER_ROLES_SYSTEM');
+  } finally {
+    process.env.AUTH_REGISTER_ROLES = 'Viewer';
+  }
+});
+
 test('register refuses up front when email is known not to work', async function(t) {
   if (skip) return t.skip(skip);
   authService.configureEmailStatus(false);
