@@ -350,6 +350,70 @@ test('an expired reset link is refused; a fresh one resets the password', async 
   assert.equal((await call('POST', '/auth/api/login', { email: 'happy@signup.test', password: 'secret2' })).status, 200);
 });
 
+// ── Nobody stuck: invited again, and a reset activates ─────────────────────
+
+test('an invite not accepted can be sent again: a fresh link, the old one gone', async function(t) {
+  if (skip) return t.skip(skip);
+  process.env.AUTH_INVITE_URL = 'http://app.test/auth/accept-invite';
+  var first = await authService.invite({ email: 'again@signup.test', name: 'Again' });
+  assert.equal(first.isNew, true);
+  var oldToken = tokenOf(lastLink());
+  var sent = inbox.length;
+  var second = await authService.invite({ email: 'again@signup.test', name: 'Again' });
+  assert.equal(second.isNew, false);
+  assert.equal(second.resent, true);
+  assert.equal(inbox.length, sent + 1, 'the email went out again');
+  var newToken = tokenOf(lastLink());
+  assert.notEqual(newToken, oldToken);
+  assert.equal((await call('GET', '/auth/api/invite-preview?token=' + oldToken)).status, 400, 'the old link is replaced');
+  var ok = await call('POST', '/auth/api/invite-accept', { token: newToken, password: 'secret-again' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal((await call('POST', '/auth/api/login', { email: 'again@signup.test', password: 'secret-again' })).status, 200);
+  var third = await authService.invite({ email: 'again@signup.test' });
+  assert.equal(third.isActivated, true);
+  assert.equal(third.resent, undefined, 'an activated account is left alone: nothing sent');
+});
+
+test('invited, the link never used, then a password reset: the account is activated and signs in', async function(t) {
+  if (skip) return t.skip(skip);
+  process.env.AUTH_INVITE_URL = 'http://app.test/auth/accept-invite';
+  await authService.invite({ email: 'stuck@signup.test', name: 'Stuck' });
+  await call('POST', '/auth/api/forgot-password', { email: 'stuck@signup.test' });
+  var r = await call('POST', '/auth/api/reset-password', { token: tokenOf(lastLink()), newPassword: 'secret-stuck' });
+  assert.equal(r.status, 200);
+  var login = await call('POST', '/auth/api/login', { email: 'stuck@signup.test', password: 'secret-stuck' });
+  assert.equal(login.status, 200, JSON.stringify(login.body));
+  var u = await knex('users').where({ email: 'stuck@signup.test' }).first('isActivated', 'activationToken');
+  assert.equal(u.isActivated, true);
+  assert.equal(u.activationToken, null, 'the invite link is spent');
+});
+
+test('already stuck — a reset gave a password, still not activated: an invite again still works', async function(t) {
+  if (skip) return t.skip(skip);
+  process.env.AUTH_INVITE_URL = 'http://app.test/auth/accept-invite';
+  await authService.invite({ email: 'halfway@signup.test', name: 'Halfway' });
+  // How an account was left before this change: a password, never activated.
+  await knex('users').where({ email: 'halfway@signup.test' }).update({ pwd: 'x', pwdSalt: 'y' });
+  var again = await authService.invite({ email: 'halfway@signup.test' });
+  assert.equal(again.resent, true);
+  var token = tokenOf(lastLink());
+  assert.equal((await call('GET', '/auth/api/invite-preview?token=' + token)).status, 200, 'a password set meanwhile does not block the invite');
+  assert.equal((await call('POST', '/auth/api/invite-accept', { token: token, password: 'secret-half' })).status, 200);
+  assert.equal((await call('POST', '/auth/api/login', { email: 'halfway@signup.test', password: 'secret-half' })).status, 200);
+});
+
+test('signed up, the activation mail lost, then a reset: activated with the sign-up roles', async function(t) {
+  if (skip) return t.skip(skip);
+  var reg = await call('POST', '/auth/api/register', { email: 'lostmail@signup.test', password: 'first-pw' });
+  assert.equal(reg.status, 201);
+  await call('POST', '/auth/api/forgot-password', { email: 'lostmail@signup.test' });
+  assert.equal((await call('POST', '/auth/api/reset-password', { token: tokenOf(lastLink()), newPassword: 'second-pw' })).status, 200);
+  var login = await call('POST', '/auth/api/login', { email: 'lostmail@signup.test', password: 'second-pw' });
+  assert.equal(login.status, 200, JSON.stringify(login.body));
+  var roles = await knex('userRolesMapping').join('roles', 'roles.id', 'userRolesMapping.roleId').where('userRolesMapping.userId', reg.body.user.id).pluck('roles.name');
+  assert.deepEqual(roles, ['Viewer']);
+});
+
 // ── Catalog ────────────────────────────────────────────────────────────────
 
 test('0014 registers the new routes once; sse-ticket is no longer open to anyone', async function(t) {
