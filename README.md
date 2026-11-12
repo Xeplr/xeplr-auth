@@ -78,10 +78,11 @@ await auth.service.invite({ email, name, invitedBy, inviterName, appName })  // 
 | `boot()` | the standalone service, env-driven, as above; resolves to the `http.Server` |
 | `start(config)` | `init(config)` + Express on `config.port` with both routers; no Redis check, no migrations, no banner |
 | `init(config)` | connect and bind the models, configure JWT and email; checks `REDIS_PREFIX` |
-| `attach()` | secondary connection to the auth database from another process: `{ ready, conn, model(name), service }` |
+| `attach()` | secondary connection to the auth database from another process: `{ ready, conn, model(name), service, internalTokenFor(userId, { ttl }) }` |
+| `createInternalToken(user, { ttl })` | an [internal token](#internal-tokens): the server calling its own API as `user` (`{ id, email, name, roles }`) |
 | `router(options)` | the `/auth/api` router; `options.resetBaseUrl` sets where reset links point |
 | `adminRouter()` | the `/auth/api/admin` router |
-| `authMiddleware` | Bearer token check against the Redis session; sets `req.user`; slides within tolerance |
+| `authMiddleware` | Bearer token check against the Redis session; sets `req.user`; slides within tolerance. An [internal token](#internal-tokens) is served as the user it acts as |
 | `accessMiddleware(options)` | per-API RBAC from the `apis` catalog — see [Access checks](#access-checks) |
 | `requireRole(...names)` | 403 unless `req.user.roles` holds one of the names; use after `authMiddleware` |
 | `mtMembershipMiddleware(options)` | 403 when a tenant header names a value the caller has no membership for |
@@ -283,6 +284,26 @@ Access-Control-Expose-Headers: X-New-Token
 ```
 
 Client code must read the header and replace its stored token, or the session ends when the grace runs out. Concurrent requests carrying the same expiring token all get the **same** new token. A slid token copies its roles from the old one; roles are re-read on `/refresh` or the next login. A revoked session is never graced.
+
+## Internal tokens
+
+A token the **server makes for itself**, to call its own API — or another xeplr service — as a user: a scheduled export, a dashboard print, a job step. **A library call, never a route**, so nothing outside the server can make one:
+
+```js
+const auth = require('@xeplr/auth').attach();
+const token = await auth.internalTokenFor(userId);             // reads the user and their roles
+// or, with the claims already at hand:
+const token = await require('@xeplr/auth').createInternalToken({ id, email, name, roles });
+
+await fetch(api + '/reports/r1/export', { method: 'POST', headers: {
+  authorization: 'Bearer ' + token, 'x-company-id': company, 'x-workspace-id': workspace, … } });
+```
+
+- **A long random string** (`xit_` + 32 random bytes), kept in Redis under `REDIS_PREFIX` with the user it acts as, **for 30 seconds** (`ttl`: 1 to 300). Not a short code: it works on the API, so it must not be guessable within its life.
+- **`authMiddleware` knows it by its prefix** and serves the request as that user. So `/verify`, every app's gate, the company membership and the API access rules apply exactly as to a sign-in token: it opens nothing that user could not open. **No code in the app** — the app's gate already asks auth.
+- **Usable for its whole life, not once**: an export is started, waited on and fetched with one token.
+- `internalTokenFor(userId)` refuses a user who is inactive or never activated: a deactivated person's scheduled work does not go on running as them.
+- The server making it and the auth service reading it must share the Redis and `REDIS_PREFIX` — as they already do for sessions.
 
 ## Routes
 
@@ -649,6 +670,8 @@ npm test          # node --test test/*.test.js
 `test/scopedRoles.test.js` checks roles held in a company or workspace (local PostgreSQL and Redis; skipped without either): the company a Viewer created lets them import there and only there (`HIDDEN` naming none, or another company where they are a plain member; `NOT_A_MEMBER` naming a stranger's); a workspace role counts in that workspace and the company role in all of its workspaces; `/me` answers as the user is in the company named; a role taken away is gone after `clearUserAccess`; an app running auth in-process (`accessMiddleware`) reads the company from the request.
 
 `test/verifyTenant.test.js` checks the membership answer on real memberships (local PostgreSQL and Redis; skipped without either): a member of company and workspace passes and is told `tenant: 'checked'`; another company, another workspace and a switched-off membership are `403 NOT_A_MEMBER`; Super Admin passes; a request naming none is not checked and does not claim to be; an unreadable `x-verify-tenant` is `400 BAD_TENANT`.
+
+`test/internalToken.test.js` (local Redis): a token the server made is served as its user, for its whole life; one nobody made is refused; it ends when its time is up; 30 seconds unless asked, never more than 5 minutes; a sign-in token is checked as before.
 
 `test/menuItems.test.js` needs a local PostgreSQL (the usual `PG*` variables): it creates and drops a throwaway database, and is skipped when none is reachable. The token-decision and `REDIS_PREFIX` tests need nothing.
 

@@ -1,3 +1,4 @@
+const internalToken = require('./lib/internalToken');
 const path = require('path');
 const { getConnection, bindModels, resolveConfig, sqlMigrator, resolveDbConnection, describeDbConnection, migrationsFor, migrationsVar } = require('@xeplr/db');
 
@@ -347,7 +348,17 @@ function attach() {
     if (!M) throw new Error('auth.attach(): unknown auth model "' + name + '"');
     return M.bindKnex(conn());
   }
-  return { ready: function () { return _ready; }, conn: conn, model: model, service: authService };
+  // A token the server makes for itself, acting as this user (by id): read
+  // with their roles, refused if they are inactive or never activated — a
+  // deactivated person's scheduled export must not go on running as them.
+  async function internalTokenFor(userId, opts) {
+    await _ready;
+    var user = await model('User').query().findById(userId).withGraphFetched('roles');
+    if (!user || !user.isActive || !user.isActivated) throw new Error('internalTokenFor: no active user "' + userId + '"');
+    return internalToken.createInternalToken({ id: user.id, email: user.email, name: user.name, roles: user.roles || [] }, opts);
+  }
+
+  return { ready: function () { return _ready; }, conn: conn, model: model, service: authService, internalTokenFor: internalTokenFor };
 }
 
 // Env vars this library needs — apps spread this into their env.required.js so
@@ -428,6 +439,9 @@ Object.defineProperty(requiredEnv, 'activationLinkVar', {
 // different question from the SERVER, and services do not share one.
 
 module.exports = {
+  // A token the server makes for itself (lib/internalToken.js): a library
+  // call, never a route. attach().internalTokenFor(userId) reads the user.
+  createInternalToken: internalToken.createInternalToken,
   // Hand in @xeplr-workflow/api's resumeByKey to release a step that is
   // waiting for someone to activate. Omitted, activation just activates.
   configureWorkflowResume: authService.configureWorkflowResume,
