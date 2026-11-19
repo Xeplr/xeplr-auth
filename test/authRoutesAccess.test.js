@@ -62,7 +62,8 @@ before(async function() {
   knex = knexLib({ client: 'pg', connection: { database: DB } });
   for (var f of ['0001_extensions.sql', '0002_users.sql', '0003_catalog_tables.sql', '0004_role_mappings.sql',
                  '0005_user_tenants_mapping.sql', '0006_seed_catalog.sql', '0007_license_module.sql',
-                 '0009_menu_labels.sql', '0010_system_scope.sql', '0011_verify_api.sql', '0012_default_role_access.sql', '0013_mapping_state.sql']) {
+                 '0009_menu_labels.sql', '0010_system_scope.sql', '0011_verify_api.sql', '0012_default_role_access.sql', '0013_mapping_state.sql',
+                 '0014_activation_routes.sql', '0015_otp_two_factor.sql']) {
     await migrate(f);
   }
   BaseModel.knex(knex);
