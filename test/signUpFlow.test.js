@@ -7,7 +7,6 @@ var assert = require('node:assert/strict');
 var fs = require('node:fs');
 var path = require('node:path');
 var http = require('node:http');
-var net = require('node:net');
 var express = require('express');
 var knexLib = require('knex');
 
@@ -25,45 +24,10 @@ var { formatDbDateTime } = utils;
 var DB = 'xeplr_auth_signup_' + process.pid;
 var admin, knex, server, base, smtp, skip = null;
 
-// ── A minimal SMTP listener: records each message, or refuses recipients ──
+// Real mail: a small SMTP listener (test/support/mailbox.js).
+var { startMailbox, decodeQP } = require('./support/mailbox');
+var mailbox = null;
 var inbox = [];
-var refuseMail = false;
-
-function startSmtp() {
-  return new Promise(function(resolve) {
-    var srv = net.createServer(function(sock) {
-      var data = null;
-      var buffer = '';
-      sock.write('220 test ESMTP\r\n');
-      sock.on('data', function(chunk) {
-        buffer += chunk.toString('utf8');
-        var i;
-        while ((i = buffer.indexOf('\r\n')) !== -1) {
-          var line = buffer.slice(0, i);
-          buffer = buffer.slice(i + 2);
-          if (data !== null) {
-            if (line === '.') { inbox.push(data.join('\n')); data = null; sock.write('250 queued\r\n'); }
-            else data.push(line.charAt(0) === '.' ? line.slice(1) : line);
-            continue;
-          }
-          var verb = line.slice(0, 4).toUpperCase();
-          if (verb === 'EHLO' || verb === 'HELO') sock.write('250 test\r\n');
-          else if (verb === 'MAIL') sock.write('250 ok\r\n');
-          else if (verb === 'RCPT') sock.write(refuseMail ? '550 mailbox unavailable\r\n' : '250 ok\r\n');
-          else if (verb === 'DATA') { data = []; sock.write('354 go ahead\r\n'); }
-          else if (verb === 'QUIT') { sock.write('221 bye\r\n'); sock.end(); }
-          else sock.write('250 ok\r\n');
-        }
-      });
-    });
-    srv.listen(0, '127.0.0.1', function() { resolve(srv); });
-  });
-}
-
-// Mail bodies are quoted-printable; undo it to read the link back.
-function decodeQP(s) {
-  return s.replace(/=\n/g, '').replace(/=([0-9A-F]{2})/g, function(m, h) { return String.fromCharCode(parseInt(h, 16)); });
-}
 
 function lastLink() {
   var body = decodeQP(inbox[inbox.length - 1] || '');
@@ -119,10 +83,12 @@ before(async function() {
   for (var f of files) await knex.raw(fs.readFileSync(path.join(dir, f), 'utf8'));
   BaseModel.knex(knex);
 
-  smtp = await startSmtp();
+  mailbox = await startMailbox();
+  smtp = mailbox.server;
+  inbox = mailbox.messages;
   utils.configureEmail({
     provider: 'smtp',
-    smtp: { host: '127.0.0.1', port: smtp.address().port, from: 'auth@app.test', secure: false, ignoreTLS: true }
+    smtp: { host: '127.0.0.1', port: mailbox.port, from: 'auth@app.test', secure: false, ignoreTLS: true }
   });
 
   var app = express();
@@ -213,14 +179,14 @@ test('register refuses up front when email is known not to work', async function
 
 test('a failed send rolls the account back, so trying again works', async function(t) {
   if (skip) return t.skip(skip);
-  refuseMail = true;
+  mailbox.refuse = true;
   try {
     var r = await call('POST', '/auth/api/register', { email: 'retry@signup.test', password: 'pw' });
     assert.equal(r.status, 503);
     assert.equal(r.body.code, 'EMAIL_SEND_FAILED');
     assert.equal(await userCount('retry@signup.test'), 0);
   } finally {
-    refuseMail = false;
+    mailbox.refuse = false;
   }
   var again = await call('POST', '/auth/api/register', { email: 'retry@signup.test', password: 'pw' });
   assert.equal(again.status, 201);

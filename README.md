@@ -87,6 +87,7 @@ await auth.service.invite({ email, name, invitedBy, inviterName, appName })  // 
 | `requireRole(...names)` | 403 unless `req.user.roles` holds one of the names; use after `authMiddleware` |
 | `mtMembershipMiddleware(options)` | 403 when a tenant header names a value the caller has no membership for |
 | `authService` | `register`, `activate`, `invite`, `previewInvite`, `acceptInvite`, `login`, `forgotPassword`, `resetPassword`, profile, phone OTP, `changePassword`, `configureActivation`, `configureEmail` |
+| `signInSteps` | [other ways in](#other-ways-in-a-code-and-the-second-step): `settings`, `checkSettings`, `signInOptions`, `requestSignInCode`, `verifySignInCode`, `afterFirstStep`, `sendSecondStepCode`, `verifySecondStep`, `twoFactorStatus`, `startAuthenticator`, `confirmAuthenticator`, `chooseMethod`, `resetTwoFactor(userId, adminId)`, `cleanPhone`, `findByVerifiedPhone` |
 | `accessService` | `getUserAccess`, `userApiState`, `userHasApiAccess`, `apiStateFor`, `ACCESS_STATES`, `getApiRule`, `getPublicItems`, `clearUserAccess`, `clearAccessRules`, `clearAllAccess` |
 | `sessionService` | `createSession`, `getSession`, `validateAccessToken`, `slideAccessToken`, `rotateSession`, `destroySession`, `destroyAllUserSessions` |
 | `ticketService` | `issueTicket`, `consumeTicket` — single-use 30-second tickets for SSE / WebSocket |
@@ -136,6 +137,10 @@ Everything in `requiredEnv`, plus a connection. `requiredEnv` includes the sign-
 | `REDIS_HOST` / `REDIS_PORT` | `127.0.0.1` / `6379` | the session store |
 | `REDIS_PASSWORD` / `REDIS_DB` | none / `0` | read by `@xeplr/utils`' cache |
 | `UPLOAD_DIR` | `./uploads` | where avatar uploads are written |
+| `AUTH_LOGIN_METHODS` | `password` | the ways in, comma-separated: `password`, `email_otp` (a code by email instead of a password), `phone_otp` (a code by text to a **verified** mobile number) — [details](#other-ways-in-a-code-and-the-second-step) |
+| `AUTH_2FA` | `off` | the second step: `off`, `optional` (each person turns it on in their profile) or `required` (everyone; with nothing set up, an emailed code). `required` refuses to start when mail is known not to work |
+| `AUTH_2FA_METHODS` | `authenticator,email` | what a second step may use: `authenticator`, `email`, `sms`. **`email` is always offered**, listed or not — the way back in for someone who cannot open their app |
+| `AUTH_2FA_TRUST_DAYS` | `0` | "Trust this device" for this many days; `0` never offers it |
 | `EMAIL_PROVIDER` | not configured | `smtp`, `brevo`, `aws` or `azure` |
 | `SMTP_HOST`, `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`, `SMTP_SECURE`, … | | SMTP settings, read by `@xeplr/utils` |
 | `BREVO_API_KEY`, `BREVO_FROM_EMAIL`, `BREVO_FROM_NAME` | | Brevo |
@@ -263,6 +268,44 @@ It is created **once**, when migrations first run on that database:
 
 To add or change an account afterwards, use the app (or `seedSuperAdmin(knex, { email, password })` from your own migration code).
 
+## Other ways in: a code, and the second step
+
+Off unless turned on: with none of the settings below, signing in is email and password, as before. `lib/signInSteps.js`; codes are `@xeplr/utils` `otp` (Redis, 5 minutes, 5 wrong tries) and authenticator codes `@xeplr/utils` `totp`.
+
+**A code instead of a password** — `AUTH_LOGIN_METHODS=password,email_otp,phone_otp`.
+
+- The email or number finds an **existing** account. A code never creates one: someone who signed up with email, adds their mobile number and later signs in with it is signed in to that same account.
+- **Only a verified number signs in.** A number is verified from the profile (`/request-phone-otp`, `/verify-phone-otp`), signed in. Otherwise anyone could type another person's number onto their own account and sign in as them.
+- **One account per verified number** — refused with `409 PHONE_TAKEN`, and held in the database by a unique index (`users_verified_phone_unique`, migration `0015`). An install that already has duplicates starts anyway, with a notice, and the check in code still applies.
+- A number typed **without its country code** (`9876543210`) finds the verified number ending in those digits — only when exactly one account has such a number.
+- `/login/code` answers the same whether or not anything matched, so it cannot be used to learn who has an account.
+- **Five codes per person per 15 minutes**, every kind counted together.
+
+**The second step** — `AUTH_2FA=optional|required`, `AUTH_2FA_METHODS=authenticator,email,sms`.
+
+- The first step answers `{ secondStep: { ticket, method, methods, sentTo, trustDays } }` instead of tokens. When the method is email or text, the code has already gone out. The ticket lives 10 minutes.
+- `/login/second-step/verify` turns the ticket into the usual tokens.
+- **Email is always offered.** Someone who cannot open their authenticator app asks for a code by email instead (`/login/second-step/send`).
+- **The second step never asks again for what the first step proved.** Signing in with an emailed code is not followed by another email. If nothing else is set up, the sign-in code counts. If an authenticator app is set up, it is asked.
+- `required` with nothing set up uses an emailed code.
+- An authenticator code works **once**: the same six digits are refused a second time.
+- **10 wrong authenticator codes per person per 15 minutes**, counted across every sign-in, lock the app out for the rest of that window. Each sign-in also allows only 5 wrong codes. An emailed code still works during the lockout. Without this limit, someone holding the password could keep starting new sign-ins to get more guesses.
+- The authenticator secret is stored **encrypted with `ENCRYPTION_KEY`**.
+- **No backup codes.** A person who lost their phone gets a code by email. If that fails too, an admin resets their second step (`POST /admin/users/:id/two-factor/reset`).
+- **Trust this device** (`AUTH_2FA_TRUST_DAYS`): the device keeps a random `trustToken` and sends it with the first step.
+  - Redis keeps only its hash, the user, and when their second step last changed.
+  - Changing method, setting up the app again, or an admin reset makes every trusted device ask again.
+
+**Text messages need an SMS provider**, registered by the host with `@xeplr/utils` `sms.register()` before `boot()`. With `phone_otp`, or `sms` as a second step, and no provider, the service **refuses to start**, naming the setting. An unknown value in any of these settings is refused the same way (`AUTH_SETTING_INVALID`), so a typo cannot quietly turn the second step off.
+
+**Who reaches the routes** (migration `0015`):
+- The public ones carry no group.
+- The `account:*` ones go to every role that can already open its own profile.
+- The reset goes to every role that can already activate a user by hand.
+- This covers each app's own roles (BI's CompanyAdmin, Creator, Viewer) without a migration in the app.
+
+`@xeplr/ui-account` 1.6 draws all of this on its sign-in and profile pages. **Turn `AUTH_2FA` on only with that version or newer**, because an older sign-in page does not know what to do with `{ secondStep }`.
+
 ## Sessions and tokens
 
 A session is one login on one device: a JWT **access token** (claims `id`, `email`, `name`, `roles`) and a random **refresh token**, both recorded in Redis.
@@ -324,7 +367,12 @@ await fetch(api + '/reports/r1/export', { method: 'POST', headers: {
 | `GET /activate` | — | `?token=…&workflowKey=…` → `{ message, user }`; grants the `AUTH_REGISTER_ROLES` roles. An invite token is refused here (it would leave an account with no password) |
 | `GET /invite-preview` | — | `?token=…` → `{ email, name }` for an account not yet activated (a password set by a reset meanwhile does not matter) |
 | `POST /invite-accept` | — | `{ token, password, name? }` → sets the password and activates |
-| `POST /login` | — | `{ email, password }` → `{ accessToken, refreshToken, user, access }`; `401` wrong password or deactivated (an invited account with no password yet is a wrong password); `403 { error, code: 'NOT_ACTIVATED' }` not yet activated — check `code`, not the wording |
+| `POST /login` | — | `{ email, password, trustToken? }` → `{ accessToken, refreshToken, user, access }`, or `{ secondStep }` when a [second step](#other-ways-in-a-code-and-the-second-step) is asked; `403 METHOD_OFF` when `AUTH_LOGIN_METHODS` leaves out `password`; `401` wrong password or deactivated (an invited account with no password yet is a wrong password); `403 { error, code: 'NOT_ACTIVATED' }` not yet activated — check `code`, not the wording |
+| `GET /sign-in-options` | — | `{ methods, twoFactor, twoFactorMethods, trustDays }` — what the sign-in page offers |
+| `POST /login/code` | — | `{ email }` or `{ phoneNumber }` → `{ sent: true, message }`, **the same answer whether or not an account matches**; a code is sent only to a real, active, activated account (a phone only when verified). `403 METHOD_OFF` when that way is off; `429 TOO_MANY_CODES` |
+| `POST /login/code/verify` | — | `{ email \| phoneNumber, code, trustToken? }` → tokens, or `{ secondStep }`; `401 BAD_CODE` / `CODE_EXPIRED`, `429 TOO_MANY_TRIES` |
+| `POST /login/second-step/send` | — | `{ ticket, method: 'email' \| 'sms' }` → `{ sent, method, sentTo }` — "send me a code by email instead" |
+| `POST /login/second-step/verify` | — | `{ ticket, method, code, trustDevice? }` → tokens, plus `trustToken` when `trustDevice` and `AUTH_2FA_TRUST_DAYS` > 0; `401 SIGN_IN_EXPIRED` once the ticket is used, 10 minutes old, or after 5 wrong authenticator codes |
 | `POST /refresh` | — | `{ refreshToken }` → a new `{ accessToken, refreshToken, user, access }` |
 | `POST /logout` | — | `{ refreshToken }` → ends that session |
 | `POST /forgot-password` | — | `{ email }` → the same message whether or not the address exists; emails `AUTH_RESET_URL?token=…` (or `<resetBaseUrl>/auth/reset-password` when the router is given `resetBaseUrl`). `503` for every address alike when the reset address or mail is not set up |
@@ -334,8 +382,12 @@ await fetch(api + '/reports/r1/export', { method: 'POST', headers: {
 | `GET /profile` · `PUT /profile` | ✓ | `{ id, email, name, phoneNumber, phoneVerified, profilePicUrl, isActivated }`; PUT takes `name`, `phoneNumber`, `email` |
 | `POST /profile/avatar` | ✓ | multipart `avatar`, an image up to 2 MB; stores the file name only — serving `UPLOAD_DIR` is the app's job |
 | `POST /change-password` | ✓ | `{ oldPassword, newPassword }`; ends every session |
-| `POST /request-phone-otp` | ✓ | `{ phoneNumber? }` — needs an SMS provider registered with `@xeplr/utils` |
-| `POST /verify-phone-otp` | ✓ | `{ code }` → `{ phoneVerified: true }` |
+| `POST /request-phone-otp` | ✓ | `{ phoneNumber? }` — needs an SMS provider registered with `@xeplr/utils`. The number is stored cleaned (`+91 98765-43210` → `+919876543210`); `409 PHONE_TAKEN` when another account has it verified |
+| `POST /verify-phone-otp` | ✓ | `{ code }` → `{ phoneVerified: true }`; `409 PHONE_TAKEN` if someone else verified it meanwhile |
+| `GET /two-factor` | ✓ | `{ mode, methods, method, authenticator, phoneNumber, phoneVerified, trustDays, signIn }` — my second step |
+| `POST /two-factor/authenticator` | ✓ | `{ issuer? }` → `{ secret, otpauthUrl }` for the app (QR or typed); held 15 minutes, not used until confirmed |
+| `POST /two-factor/authenticator/confirm` | ✓ | `{ code }` from the app → stores the secret (encrypted) and makes the app my second step |
+| `POST /two-factor/method` | ✓ | `{ method: 'authenticator' \| 'email' \| 'sms' \| null }`; `null` turns it off (`409 REQUIRED` when `AUTH_2FA=required`); `409 NOT_SET_UP` for an app not set up or a number not verified |
 | `POST /sse-ticket` | ✓ | `{ scopes? }` (default `['user:me:*']`) → `{ ticket, expiresIn: 30 }` |
 
 ### `/auth/api/admin`
@@ -344,7 +396,8 @@ await fetch(api + '/reports/r1/export', { method: 'POST', headers: {
 
 | route | |
 |---|---|
-| `GET /users` | users with their roles, `isActivated`, and `invitePending` (invited, no password set yet — they activate by accepting the invite) |
+| `GET /users` | users with their roles, `isActivated`, `twoFactorMethod`, `hasAuthenticator`, and `invitePending` (invited, no password set yet — they activate by accepting the invite) |
+| `POST /users/:id/two-factor/reset` | `users:edit` — clears someone's second step (method and authenticator); every device they trusted asks again. For a person who lost their phone |
 | `POST /users/:id/activate` | `users:edit` — activates an account without its emailed link and grants the `AUTH_REGISTER_ROLES` roles; `409` if already activated or invited without a password yet |
 | `GET /roles` | `[{ id, name, scope, mtId1 }]`: the current company's roles and the generic ones; system roles only for Super Admin |
 | `GET /access-items` | `{ apis, pages, elements, menus }`, each with its roles |
@@ -664,6 +717,16 @@ Hooks run in the process that did the work — register them in the same script 
 ```sh
 npm test          # node --test test/*.test.js
 ```
+
+`test/signInSteps.test.js` covers signing in with a code and the second step, against local PostgreSQL and Redis, real mail and a real SMS provider call:
+- an emailed code: the same answer for anyone, used once, five per 15 minutes;
+- a mobile number: verified only, one account per number, typed without `+91`;
+- the authenticator: set up, stored encrypted, a code good once;
+- an emailed code instead of the app;
+- `required` with nothing set up;
+- never asked twice for the same proof;
+- a trusted device, and an admin reset;
+- the settings refused by name, and text messages with no provider.
 
 `test/signUpFlow.test.js` runs the whole sign-up flow over HTTP against a local PostgreSQL and Redis, with real mail: nodemailer (the workspace dev dependency) talks SMTP to a small listener inside the test. It is skipped when any of the three is missing.
 

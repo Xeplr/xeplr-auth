@@ -24,6 +24,7 @@ const mtMembershipMiddleware = require('./lib/mtMembershipMiddleware');
 const createAuthRouter = require('./lib/authRouter');
 const createAdminRouter = require('./lib/adminRouter');
 const systemScope = require('./lib/systemScope');
+const signInSteps = require('./lib/signInSteps');
 const models = require('./models');
 
 let _initialized = false;
@@ -218,6 +219,24 @@ async function boot() {
   // reset) cannot be sent, and the banner says so rather than the first
   // person to register finding out.
   var email = await emailStatus();
+
+  // The ways in (AUTH_LOGIN_METHODS, AUTH_2FA…): a typo or a text-message
+  // setting with no SMS provider stops the start, named — never a sign-in
+  // that quietly skips its second step.
+  var signIn;
+  try {
+    signIn = signInSteps.checkSettings();
+  } catch (err) {
+    console.error('\n[xeplr-auth] ' + err.message + '\n');
+    process.exit(1);
+  }
+  // A second step falls back to an emailed code; with mail known NOT to work,
+  // anyone without an authenticator app would be shut out.
+  if (signIn.mode === 'required' && email.ok === false && !email.unknown) {
+    console.error('\n[xeplr-auth] AUTH_2FA=required needs working email: the emailed code is everyone\'s');
+    console.error('             way in until they set up an authenticator app. ' + email.detail + '\n');
+    process.exit(1);
+  }
   // Registration and reset refuse up front when mail is known not to work,
   // instead of creating an account whose link never goes out.
   authService.configureEmailStatus(email.unknown ? null : email.ok);
@@ -241,7 +260,7 @@ async function boot() {
     }
   });
 
-  banner(email);
+  banner(email, signIn);
   if (!email.ok) warnNoEmail(email);
   return server;
 }
@@ -271,7 +290,7 @@ function describeEmail(email) {
 
 // Startup summary — the EFFECTIVE config (defaults resolved) so you can see what
 // the service is actually running with. Secrets are masked, never printed.
-function banner(email) {
+function banner(email, signIn) {
   var set = function (v) { return v ? '✓ set' : '✗ MISSING'; };
   var rows = [
     ['port',               process.env.AUTH_PORT || '19001'],
@@ -288,6 +307,9 @@ function banner(email) {
     ['redis',              (process.env.REDIS_HOST || 'localhost') + ':' + (process.env.REDIS_PORT || '6379')],
     ['redis prefix',       redisPrefix()],
     ['email',              describeEmail(email)],
+    ['sign in with',       signIn ? signIn.login.join(', ') : '?'],
+    ['second step',        signIn ? (signIn.mode === 'off' ? 'off' : signIn.mode + ' — ' + signIn.methods.join(', ')) : '?'],
+    ['trust a device',     signIn ? (signIn.trustDays ? signIn.trustDays + ' days' : 'never') : '?'],
     // Names the VARIABLE it resolved through, not just "set" — with a shared
     // default and a per-service override, "which server am I on" is otherwise
     // a guess.
@@ -461,6 +483,9 @@ module.exports = {
   authHelper,
   seedSuperAdmin,
   authService,
+  // Code sign-in and the second step (lib/signInSteps.js): settings(),
+  // signInOptions(), resetTwoFactor(userId, adminId), cleanPhone() …
+  signInSteps,
   accessService,
   sessionService,
   ticketService,

@@ -39,7 +39,10 @@ class User extends BaseModel {
         resetToken: { type: ['string', 'null'], maxLength: 255 },
         resetTokenExpiry: { type: ['string', 'null'] },
         activationToken: { type: ['string', 'null'], maxLength: 255 },
-        normalizedEmail: { type: ['string', 'null'], maxLength: 255 }
+        normalizedEmail: { type: ['string', 'null'], maxLength: 255 },
+        twoFactorMethod: { type: ['string', 'null'], maxLength: 20 },
+        totpSecret: { type: ['string', 'null'], maxLength: 500 },
+        twoFactorChangedOn: { type: ['string', 'null'] }
       }
     };
   }
